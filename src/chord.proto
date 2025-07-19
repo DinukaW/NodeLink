@@ -1,0 +1,184 @@
+syntax = "proto3";
+
+package chord;
+
+// Node information
+message Node {
+    int32 node_id = 1;
+    string address = 2;
+    int32 port = 3;
+}
+
+// File record for storage
+message FileRecord {
+    string filename = 1;
+    bytes content = 2;
+    int32 file_hash = 3;
+    repeated int32 replicas = 4;
+}
+
+// Token record for inverted index
+message TokenRecord {
+    string token = 1;
+    int32 token_hash = 2;
+    map<string, FileMetadata> files = 3;
+}
+
+// File metadata for inverted index
+message FileMetadata {
+    string filename = 1;
+    int32 file_hash = 2;
+    int32 node_id = 3;
+    string node_address = 4;
+    repeated string all_tokens = 5;
+    int32 file_size = 6;
+}
+
+// Request messages
+message FindSuccessorRequest {
+    int32 key_id = 1;
+}
+
+message FindSuccessorResponse {
+    bool success = 1;
+    Node successor = 2;
+    string error = 3;
+}
+
+message GetPredecessorRequest {
+    // Empty - just a request
+}
+
+message GetPredecessorResponse {
+    bool success = 1;
+    Node predecessor = 2;
+}
+
+message GetSuccessorRequest {
+    // Empty - just a request
+}
+
+message GetSuccessorResponse {
+    bool success = 1;
+    Node successor = 2;
+    string error = 3;
+}
+
+message NotifyRequest {
+    Node node = 1;
+}
+
+message NotifyResponse {
+    bool success = 1;
+}
+
+message StoreFileRequest {
+    string filename = 1;
+    bytes content = 2;
+    int32 file_hash = 3;
+}
+
+message StoreFileResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message SearchFilesRequest {
+    string query = 1;
+}
+
+message SearchFilesResponse {
+    bool success = 1;
+    repeated string files = 2;
+    string error = 3;
+}
+
+message GetFileRequest {
+    string filename = 1;
+}
+
+message GetFileResponse {
+    bool success = 1;
+    bytes content = 2;
+    string error = 3;
+}
+
+message StoreTokenRequest {
+    string token = 1;
+    int32 token_hash = 2;
+    FileMetadata file_metadata = 3;
+}
+
+message StoreTokenResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message LookupTokenRequest {
+    string token = 1;
+}
+
+message LookupTokenResponse {
+    bool success = 1;
+    TokenRecord token_record = 2;
+    string error = 3;
+}
+
+message TransferFileRequest {
+    string filename = 1;
+    bytes content = 2;
+    int32 file_hash = 3;
+    int32 from_node = 4;
+}
+
+message TransferFileResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message UpdateSuccessorRequest {
+    Node new_successor = 1;
+}
+
+message UpdateSuccessorResponse {
+    bool success = 1;
+}
+
+message UpdatePredecessorRequest {
+    Node new_predecessor = 1;
+}
+
+message UpdatePredecessorResponse {
+    bool success = 1;
+}
+
+message PingRequest {
+    // Empty - just a ping
+}
+
+message PingResponse {
+    bool success = 1;
+}
+
+// Generic message wrapper for QUIC streams
+message ChordMessage {
+    enum MessageType {
+        FIND_SUCCESSOR = 0;
+        GET_PREDECESSOR = 1;
+        GET_SUCCESSOR = 2;
+        NOTIFY = 3;
+        STORE_FILE = 4;
+        SEARCH_FILES = 5;
+        GET_FILE = 6;
+        STORE_TOKEN = 7;
+        LOOKUP_TOKEN = 8;
+        TRANSFER_FILE = 9;
+        UPDATE_SUCCESSOR = 10;
+        UPDATE_PREDECESSOR = 11;
+        PING = 12;
+    }
+    
+    MessageType type = 1;
+    bytes payload = 2;
+    uint64 request_id = 3;
+}

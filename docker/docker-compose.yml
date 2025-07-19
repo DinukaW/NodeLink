@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  chord-node-1:
+    build: .
+    container_name: chord-node-1
+    ports:
+      - "8000:8000"  # REST API
+      - "9000:9000"  # DHT port
+    environment:
+      - NODE_ID=1
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=""
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  chord-node-2:
+    build: .
+    container_name: chord-node-2
+    ports:
+      - "8001:8000"  # REST API
+      - "9001:9000"  # DHT port
+    environment:
+      - NODE_ID=2
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=chord-node-1:9000
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    depends_on:
+      - chord-node-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  chord-node-3:
+    build: .
+    container_name: chord-node-3
+    ports:
+      - "8002:8000"  # REST API
+      - "9002:9000"  # DHT port
+    environment:
+      - NODE_ID=3
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=chord-node-1:9000,chord-node-2:9000
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    depends_on:
+      - chord-node-1
+      - chord-node-2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  chord-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  shared-data:
+    driver: local

@@ -1,0 +1,27 @@
+# Development override for docker-compose.yml
+version: '3.8'
+
+services:
+  chord-node-1:
+    volumes:
+      - .:/app
+    command: ["python", "rest_api.py", "--reload"]
+    environment:
+      - DEBUG=1
+      - LOG_LEVEL=DEBUG
+
+  chord-node-2:
+    volumes:
+      - .:/app
+    command: ["python", "rest_api.py", "--reload"]
+    environment:
+      - DEBUG=1
+      - LOG_LEVEL=DEBUG
+
+  chord-node-3:
+    volumes:
+      - .:/app
+    command: ["python", "rest_api.py", "--reload"]
+    environment:
+      - DEBUG=1
+      - LOG_LEVEL=DEBUG
