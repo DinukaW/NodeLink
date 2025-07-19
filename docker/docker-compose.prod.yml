@@ -1,0 +1,147 @@
+# Production Docker Compose configuration
+version: '3.8'
+
+services:
+  chord-node-1:
+    build: .
+    container_name: chord-node-1
+    ports:
+      - "8000:8000"  # REST API
+      - "9000:9000"  # DHT port
+    environment:
+      - NODE_ID=1
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=""
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  chord-node-2:
+    build: .
+    container_name: chord-node-2
+    ports:
+      - "8001:8000"  # REST API
+      - "9001:9000"  # DHT port
+    environment:
+      - NODE_ID=2
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=chord-node-1:9000
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    depends_on:
+      chord-node-1:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  chord-node-3:
+    build: .
+    container_name: chord-node-3
+    ports:
+      - "8002:8000"  # REST API
+      - "9002:9000"  # DHT port
+    environment:
+      - NODE_ID=3
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DHT_PORT=9000
+      - BOOTSTRAP_NODES=chord-node-1:9000,chord-node-2:9000
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./shared:/app/shared
+      - ./shared2:/app/shared2
+      - ./shared3:/app/shared3
+    networks:
+      - chord-network
+    depends_on:
+      chord-node-1:
+        condition: service_healthy
+      chord-node-2:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+networks:
+  chord-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  shared-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./shared

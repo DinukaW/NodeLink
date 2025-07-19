@@ -1,0 +1,53 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Documentation (keep only essential)
+PHASE*.md
+IMPLEMENTATION_STATUS.md
+
+# Test and demo files (optional - remove if you want tests in container)
+test_*.py
+demo_*.py
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Local development
+.env.local
+.env.development
+
+# Build artifacts
+build/
+dist/
