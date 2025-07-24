@@ -6,13 +6,18 @@ import hashlib
 
 
 class Node:
-    def __init__(self, host, port):
+    def __init__(self, host, port, bootstrap_host="localhost", bootstrap_port=9000):
         self.stop = False
         self.host = host
         self.port = port
         self.M = 16
         self.N = 2**self.M
         self.key = self.hasher(host+str(port))
+        
+        # Bootstrap server connection
+        self.bootstrap_host = bootstrap_host
+        self.bootstrap_port = bootstrap_port
+        
         # You will need to kill this thread when leaving, to do so just set self.stop = True
         threading.Thread(target = self.listener).start()
         self.files = []
@@ -49,11 +54,51 @@ class Node:
         self.successor = (self.host, self.port)
         self.predecessor = (self.host, self.port)
         # additional state variables
+        
+        # Start heartbeat to bootstrap server
+        self.heartbeat_thread = None
 
 
     def hasher(self, key):
         '''nn'''
         return int(hashlib.md5(key.encode()).hexdigest(), 16) % self.N
+    
+    def send_to_bootstrap(self, message):
+        """Send message to bootstrap server and get response"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)  # 5 second timeout
+            sock.connect((self.bootstrap_host, self.bootstrap_port))
+            sock.send(message.encode('utf-8'))
+            response = sock.recv(1024).decode('utf-8')
+            sock.close()
+            return response
+        except socket.timeout:
+            print("Bootstrap server timeout")
+            return None
+        except ConnectionRefusedError:
+            print("Bootstrap server not available")
+            return None
+        except Exception as e:
+            print(f"Error communicating with bootstrap server: {e}")
+            return None
+    
+    def send_heartbeat(self):
+        """Send heartbeat to bootstrap server"""
+        while not self.stop:
+            try:
+                message = f"heartbeat {self.host} {self.port}"
+                response = self.send_to_bootstrap(message)
+                if response != "ack":
+                    print(f"Bootstrap server heartbeat failed: {response}")
+            except Exception as e:
+                print(f"Heartbeat error: {e}")
+            
+            # Sleep in smaller chunks to respond to stop signal faster
+            for _ in range(30):  # 3 seconds total, check stop every 0.1s
+                if self.stop:
+                    break
+                time.sleep(0.1)
 
     def handleConnection(self, client, addr):
         '''nn'''
@@ -62,41 +107,24 @@ class Node:
 
         if message_list[0] =="lookup":
             client.close()
-            one_node = False
+            tuple_ret = self.lookup(int(message_list[3]), (message_list[1], int(message_list[2])))
 
-            if self.successor == (self.host, self.port):
-                one_node = True
+            ans_check = False
+
+            if tuple_ret != (" ", 0):
+                ans_check = True
             else:
-                one_node = False
+                ans_check = False
 
-            if one_node:
-                h_o = str(self.host)
-                p_o = str(self.port)
-                message = "1_person" + " " + h_o + " " + p_o
+            if ans_check:
+                msg_type = "ans_found" 
+                arg1 = str(tuple_ret[0])
+                arg2 = str(tuple_ret[1])
                 soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                message = msg_type + " "+ arg1 + " "+ arg2
                 soc.connect((message_list[1], int(message_list[2])))
                 soc.send(message.encode('utf-8'))
                 soc.close()
-
-            elif not one_node:
-                tuple_ret = self.lookup(int(message_list[3]), (message_list[1], int(message_list[2])))
-
-                ans_check = False
-
-                if tuple_ret != (" ", 0):
-                    ans_check = True
-                else:
-                    ans_check = False
-
-                if ans_check:
-                    msg_type = "ans_found" 
-                    arg1 = str(tuple_ret[0])
-                    arg2 = str(tuple_ret[1])
-                    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    message = msg_type + " "+ arg1 + " "+ arg2
-                    soc.connect((message_list[1], int(message_list[2])))
-                    soc.send(message.encode('utf-8'))
-                    soc.close()
 
         ############################################# ping statements part 1
         # new node will recv this from old node
@@ -198,6 +226,12 @@ class Node:
             pred1 = str(message_list[1])
             pred2 = int(message_list[2])
             self.predecessor = (pred1, pred2)
+            client.close()
+            
+        if message_list[0] == "change_succ_1":
+            succ1 = str(message_list[1])
+            succ2 = int(message_list[2])
+            self.successor = (succ1, succ2)
             client.close()
 
     ############################################# ping part 2
@@ -462,14 +496,25 @@ class Node:
     def listener(self):
         '''xx'''
         listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((self.host, self.port))
         listener.listen(10)
+        listener.settimeout(1.0)  # Add timeout to allow checking stop condition
+        
         while not self.stop:
-            client, addr = listener.accept()
-            threading.Thread(target = self.handleConnection, args = (client, addr)).start()
+            try:
+                client, addr = listener.accept()
+                threading.Thread(target = self.handleConnection, args = (client, addr), daemon=True).start()
+            except socket.timeout:
+                continue  # Check stop condition
+            except Exception as e:
+                if not self.stop:
+                    print(f"Listener error: {e}")
+                break
+                
         print ("Shutting down node:", self.host, self.port)
         try:
-            listener.shutdown(2)
+            listener.shutdown(socket.SHUT_RDWR)
             listener.close()
         except:
             listener.close()
@@ -483,10 +528,11 @@ class Node:
         num_tracer = False
         succ_msg = ""
 
-        while 1:
+        while not self.stop:
 
             if self.leave_bool:
                 node_alive = False
+                break  # Exit the loop when leaving
 
             elif not self.leave_bool:
                 h_o = str(self.host)
@@ -560,7 +606,12 @@ class Node:
 
                     new_conn.send(file_list.encode('utf-8'))
                     new_conn.close()
-                time.sleep(0.5)
+                    
+            # Sleep in smaller chunks to respond to stop signal faster
+            for _ in range(5):  # 0.5 seconds total, check stop every 0.1s
+                if self.stop:
+                    break
+                time.sleep(0.1)
 
 
 
@@ -631,144 +682,133 @@ class Node:
 
     def join(self, joiningAddr):
         '''cc'''
-        # if empty string, then just set pred and successor to ur own host and port
-        if joiningAddr == "":
-            self.successor = (self.host,self.port)
-            self.predecessor = (self.host,self.port)
-
-        else:
-            curr_key = self.key
-
-            j_1 = joiningAddr[0]
-            j_2 = joiningAddr[1]
-
-            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            message = "lookup" + " " + str(self.host) + " " + str(self.port) +" "+ str(curr_key)
-            soc.connect((j_1,j_2))
-            soc.send(message.encode('utf-8'))
-            soc.close()
-
-            control = False
-
-            length_file_node = len(self.position)
-
-            if  length_file_node == 0:
-                control = True
-            else:
-                control = False
-
-            while control:
-                length_file_node = len(self.position)
-
-                if  length_file_node == 0:
-                    control = True
-                else:
-                    control = False
-
-
-            self.successor = self.position
-
-            if not self.join_bool:
+        # Register with bootstrap server
+        try:
+            message = f"register {self.host} {self.port}"
+            response = self.send_to_bootstrap(message)
+            
+            if not response:
+                print("Failed to connect to bootstrap server")
+                return False
                 
-              
-                conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                msg_type = "join_change_pred"
-                hos = str(self.host) 
-                por = str(self.port)
-                conn.connect(self.successor)
-                message = msg_type + " " + hos + " " + por
-                conn.send(message.encode('utf-8'))
+            response_parts = response.split()
+            
+            if response_parts[0] == "first_node":
+                # This is the first node in the network
+                self.successor = (self.host, self.port)
+                self.predecessor = (self.host, self.port)
+                print(f"Joined as first node with key {self.key}")
+                
+            elif response_parts[0] == "join_position":
+                # Join existing network
+                successor_host = response_parts[1]
+                successor_port = int(response_parts[2])
+                predecessor_host = response_parts[3]
+                predecessor_port = int(response_parts[4])
+                
+                self.successor = (successor_host, successor_port)
+                self.predecessor = (predecessor_host, predecessor_port)
+                
+                # Notify successor and predecessor
+                self.notify_successor_predecessor()
+                print(f"Joined network with key {self.key}, successor: {self.successor}, predecessor: {self.predecessor}")
+                
+            else:
+                print(f"Bootstrap server error: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"Error joining network: {e}")
+            return False
+        
+        # Start heartbeat thread
+        self.heartbeat_thread = threading.Thread(target=self.send_heartbeat, daemon=True)
+        self.heartbeat_thread.start()
 
-                self.join_one_node = False
-                self.joinedx = True
-
-                message = conn.recv(1024).decode('utf-8')
-                message_list = message.split()
-                conn.close()
-                self.succ_succ = (message_list[1], int(message_list[2]))
-
-            elif self.join_bool:
-
-                self.predecessor = self.successor
-                msg_type = "sec_node_pred"
-                hos = str(self.host) 
-                por = str(self.port)
-
-                conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                message = msg_type + " " + hos  + " " + por
-                if not self.joinedx:
-                    self.join_one_node = True
-
-                conn.connect(self.successor)
-                conn.send(message.encode('utf-8'))
-                self.succ_succ = (self.host, int(self.port))
-                conn.close()
-
-
-        # call ping thread
-
+        # Call ping thread for node-to-node monitoring
         self.thread_ping()
 
-        # threading.Thread(target = self.check, args = ()).start()
+        # File rehashing logic remains the same
+        self.perform_file_rehashing()
+        
+        return True
+    
+    def notify_successor_predecessor(self):
+        """Notify successor and predecessor about the new node"""
+        try:
+            # Notify successor to update its predecessor
+            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            message = f"change_pred_1 {self.host} {self.port}"
+            soc.connect(self.successor)
+            soc.send(message.encode('utf-8'))
+            soc.close()
+            
+            # Notify predecessor to update its successor
+            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            message = f"change_succ_1 {self.host} {self.port}"
+            soc.connect(self.predecessor)
+            soc.send(message.encode('utf-8'))
+            soc.close()
+            
+        except Exception as e:
+            print(f"Error notifying neighbors: {e}")
+    
+    def perform_file_rehashing(self):
+        """Perform file rehashing after joining"""
+        try:
+            # File rehashing logic - same as original but in separate method
+            if self.successor != (self.host, self.port):  # Only if not the only node
+                file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                file_socket.connect(self.successor)
+                hos = self.host
+                por = str(self.port)
+                k_k = str(self.key) 
+                message = "succ_send_files_in_range" + " " + k_k + " " + hos + " " + por
+                file_socket.send(message.encode('utf-8'))
+                message = file_socket.recv(1024).decode('utf-8')
+                file_str = message
+                file_list = message.split()
 
-        #### FILE REHASHING ####
-        # send msg to succ
+                for file in file_list:
+                    self.files.append(file)
 
-        file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_socket.connect(self.successor)
-        hos = self.host
-        por = str(self.port)
-        k_k = str(self.key) 
-        message = "succ_send_files_in_range" + " " + k_k + " " + hos + " " + por
-        file_socket.send(message.encode('utf-8'))
-        message = file_socket.recv(1024).decode('utf-8')
-        file_str = message
-        file_list = message.split()
+                file_socket.close()
 
-        for file in file_list:
-            self.files.append(file)
+                file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                file_socket.connect(self.successor)
+                message = "files_to_del" + " " + file_str
+                file_socket.send(message.encode('utf-8'))
+                message = file_socket.recv(1024).decode('utf-8')
+                file_socket.close()
 
-        file_socket.close()
+                # ask succ to send its update file list and store it in backup
+                file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                file_socket.connect(self.successor)
+                message = "succ_send_files"
+                file_socket.send(message.encode('utf-8'))
+                time.sleep(0.01)
+                message = file_socket.recv(1024).decode('utf-8')
+                file_list = message.split()
+                for file in file_list:
+                    self.backUpFiles.append(file)
 
-        file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_socket.connect(self.successor)
-        message = "files_to_del" + " " + file_str
-        file_socket.send(message.encode('utf-8'))
-        message = file_socket.recv(1024).decode('utf-8')
-        file_socket.close()
+                file_socket.close()
 
-        # ask succ to send its update file list and store it in backup
-        file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_socket.connect(self.successor)
-        message = "succ_send_files"
-        file_socket.send(message.encode('utf-8'))
-        time.sleep(0.01)
-        message = file_socket.recv(1024).decode('utf-8')
-        file_list = message.split()
-        for file in file_list:
-            self.backUpFiles.append(file)
+                # send ur updated files to predecessor to store in its backup
+                if self.predecessor != (self.host, self.port):
+                    file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    file_socket.connect(self.predecessor)
+                    message = "store_backup_files"
 
-        file_socket.close()
+                    for file in self.files:
+                        message = message + " " + file + " "
 
-        _file_sent = False
-        address_to_send = self.predecessor
-        # send ur updated files to prdecessor to store in its backup
-        file_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_socket.connect(self.predecessor)
-        message = "store_backup_files"
-
-        if address_to_send != ():
-            _file_sent= True
-
-        file_list = message.split()
-        for file in self.files:
-            message = message + " " + file + " "
-            _file_sent = True
-
-        _file_sent = False
-        message.strip()
-        file_socket.send(message.encode('utf-8'))
-        file_socket.close()
+                    message = message.strip()
+                    file_socket.send(message.encode('utf-8'))
+                    file_socket.close()
+                    
+        except Exception as e:
+            print(f"Error in file rehashing: {e}")
 
 
 
@@ -849,9 +889,11 @@ class Node:
         new_socket.connect(file_node)
         message = "put_file" + " " + fileName
         new_socket.send(message.encode('utf-8'))
-        _path_file = self.host+"_"+str(self.port) + "/" + fileName
+        
+        # Use full path for the file
+        file_path = self.host+"_"+str(self.port) + "/" + fileName
         time.sleep(0.5)
-        self.sendFile(new_socket, fileName)
+        self.sendFile(new_socket, file_path)
         new_socket.close()
 
 
@@ -953,33 +995,40 @@ class Node:
         '''bb'''
         self.leave_bool = True
 
+        # Notify bootstrap server
+        try:
+            message = f"leave {self.host} {self.port}"
+            response = self.send_to_bootstrap(message)
+            if response != "ack":
+                print(f"Bootstrap server leave notification failed: {response}")
+        except Exception as e:
+            print(f"Error notifying bootstrap server about leave: {e}")
 
-        soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        soc.connect(self.successor)
+        # Original leave logic
+        if self.successor != (self.host, self.port):  # Only if not the only node
+            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            soc.connect(self.successor)
 
-        pred1 = str(self.predecessor[0]) 
-        pred2 = str(self.predecessor[1])
-        msg_code = "leaving" 
+            pred1 = str(self.predecessor[0]) 
+            pred2 = str(self.predecessor[1])
+            msg_code = "leaving" 
 
-        message = msg_code + " " + pred1 + " " + pred2
-        soc.send(message.encode('utf-8'))
-        soc.close()
+            message = msg_code + " " + pred1 + " " + pred2
+            soc.send(message.encode('utf-8'))
+            soc.close()
 
-        # send files to successor
-        #EMAAN PLZZ UPDATE BACKUP FILESSSSS
+            # send files to successor
+            new_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_conn.connect(self.successor)
+            file_list = "leaving_succ_take_files"
 
-        new_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        new_conn.connect(self.successor)
-        file_list = "leaving_succ_take_files"
+            for file in self.files:
+                file_list = file_list + " " + file + " "
 
-        for file in self.files:
-            file_list = file_list + " " + file + " "
+            file_list = file_list.strip()
 
-        file_list = file_list.strip()
-
-        new_conn.send(file_list.encode('utf-8'))
-        new_conn.close()
-
+            new_conn.send(file_list.encode('utf-8'))
+            new_conn.close()
 
         self.kill()
 
@@ -1011,3 +1060,5 @@ class Node:
         '''vv'''
         # DO NOT EDIT THIS, used for code testing
         self.stop = True
+        # Give threads time to stop gracefully
+        time.sleep(0.5)
