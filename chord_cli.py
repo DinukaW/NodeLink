@@ -44,6 +44,7 @@ def main():
     print("Available commands:")
     print("  put <filename>    - Store a file")
     print("  get <filename>    - Retrieve a file") 
+    print("  search <term>     - Search for files by name")
     print("  status           - Show node status")
     print("  leave            - Leave network")
     print("  quit             - Exit")
@@ -75,12 +76,26 @@ def main():
                 except Exception as e:
                     print(f"Error retrieving file: {e}")
                     
+            elif command[0] == "search" and len(command) == 2:
+                search_term = command[1]
+                try:
+                    results = node.search(search_term)
+                    if results:
+                        print(f"Found {len(results)} files matching '{search_term}':")
+                        for i, (filename, matching_words) in enumerate(results, 1):
+                            print(f"  {i}. {filename} (matched words: {', '.join(matching_words)})")
+                    else:
+                        print(f"No files found matching '{search_term}'")
+                except Exception as e:
+                    print(f"Error searching files: {e}")
+                    
             elif command[0] == "status":
                 print(f"Node Key: {node.key}")
                 print(f"Successor: {node.successor}")
                 print(f"Predecessor: {node.predecessor}")
                 print(f"Files: {node.files}")
                 print(f"Backup Files: {node.backUpFiles}")
+                print(f"File Index: {dict(list(node.file_index.items())[:5])}{'...' if len(node.file_index) > 5 else ''}")
                 print(f"Bootstrap Server: {node.bootstrap_host}:{node.bootstrap_port}")
                 print(f"Stop flag: {node.stop}")
                 print(f"Leave flag: {node.leave_bool}")
@@ -98,7 +113,7 @@ def main():
                 break
                 
             else:
-                print("Unknown command. Available commands: put, get, status, leave, quit")
+                print("Unknown command. Available commands: put, get, search, status, leave, quit")
                 
     except KeyboardInterrupt:
         print("\nShutting down node and transferring files...")

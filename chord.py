@@ -3,6 +3,7 @@ import threading
 import os
 import time
 import hashlib
+import re
 
 
 class Node:
@@ -23,6 +24,11 @@ class Node:
         self.files = []
         self.join_bool = False
         self.backUpFiles = []
+        
+        # File indexing system - Phase 2
+        self.file_index = {}  # {word: [(filename, [other_words])]}
+        self.backup_index = {}  # Backup of index entries
+        
         self.position = ()
         self.succ_changed_bool = False
 
@@ -65,6 +71,170 @@ class Node:
     def hasher(self, key):
         '''nn'''
         return int(hashlib.md5(key.encode()).hexdigest(), 16) % self.N
+    
+    def extract_words_from_filename(self, filename):
+        """Extract words from filename for indexing"""
+        import re
+        # Remove file extension
+        name_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
+        # Split by common separators and extract words
+        words = re.findall(r'[a-zA-Z0-9]+', name_without_ext.lower())
+        return [word for word in words if len(word) > 1]  # Filter out single characters
+    
+    def create_file_index_entry(self, filename):
+        """Create index entries for a file"""
+        words = self.extract_words_from_filename(filename)
+        return words
+    
+    def store_index_entry(self, word, filename, all_words):
+        """Store an index entry for a word"""
+        word_key = self.hasher(word)
+        
+        # Use the same lookup mechanism as files
+        # First check if this node is responsible
+        if self.is_responsible_for_key(word_key):
+            # This node is responsible for the index entry
+            if word not in self.file_index:
+                self.file_index[word] = []
+            
+            # Check if this filename is already indexed for this word
+            existing_entry = None
+            for entry in self.file_index[word]:
+                if entry[0] == filename:
+                    existing_entry = entry
+                    break
+            
+            if existing_entry:
+                # Update existing entry
+                existing_entry[1] = all_words
+            else:
+                # Add new entry
+                self.file_index[word].append((filename, all_words))
+            
+            print(f"Indexed word '{word}' for file '{filename}' on this node")
+        else:
+            # Send index entry to responsible node using distributed lookup
+            try:
+                responsible_node = self.find_responsible_node_for_key(word_key)
+                if responsible_node and responsible_node != (self.host, self.port):
+                    self.send_index_entry_to_node(word, filename, all_words, responsible_node)
+                    print(f"Sent index entry for word '{word}' to node {responsible_node}")
+                else:
+                    # Fallback: store locally if can't find responsible node
+                    if word not in self.file_index:
+                        self.file_index[word] = []
+                    self.file_index[word].append((filename, all_words))
+                    print(f"Stored index entry for word '{word}' locally (fallback)")
+            except Exception as e:
+                print(f"Failed to send index entry for word '{word}': {e}")
+                # Fallback: store locally
+                if word not in self.file_index:
+                    self.file_index[word] = []
+                self.file_index[word].append((filename, all_words))
+    
+    def is_responsible_for_key(self, key):
+        """Check if this node is responsible for a given key"""
+        if self.successor == (self.host, self.port):
+            return True  # Only node in network
+        
+        # Validate successor exists
+        if not self.successor or len(self.successor) != 2:
+            return True  # Fallback to local storage
+            
+        successor_key = self.hasher(self.successor[0] + str(self.successor[1]))
+        
+        if successor_key > self.key:
+            # Normal case: key should be > self.key and <= successor_key
+            return key > self.key and key <= successor_key
+        else:
+            # Wrap around case: key > self.key OR key <= successor_key
+            return key > self.key or key <= successor_key
+    
+    def find_responsible_node_for_key(self, key):
+        """Find the node responsible for a key using iterative lookup"""
+        if self.is_responsible_for_key(key):
+            return (self.host, self.port)
+        elif self.successor == (self.host, self.port):
+            return (self.host, self.port)  # Only node
+        else:
+            return self.successor  # Send to successor for further routing
+    
+    def send_index_entry_to_node(self, word, filename, all_words, target_node):
+        """Send an index entry to the responsible node"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10.0)
+            sock.connect(target_node)
+            
+            # Send index entry message
+            other_words_str = ",".join(all_words)
+            message = f"store_index_entry {word} {filename} {other_words_str}"
+            sock.send(message.encode('utf-8'))
+            sock.close()
+            
+        except Exception as e:
+            sock.close() if sock else None
+            raise Exception(f"Index entry transfer failed: {e}")
+    
+    def search_word_in_index(self, search_word):
+        """Search for files containing a specific word"""
+        word_key = self.hasher(search_word.lower())
+        
+        # Check if this node is responsible for this word
+        if self.is_responsible_for_key(word_key):
+            # This node has the index for this word
+            return self.file_index.get(search_word.lower(), [])
+        else:
+            # Query the responsible node
+            try:
+                responsible_node = self.find_responsible_node_for_key(word_key)
+                if responsible_node and responsible_node != (self.host, self.port):
+                    return self.query_index_from_node(search_word, responsible_node)
+                else:
+                    # Fallback: check local index
+                    return self.file_index.get(search_word.lower(), [])
+            except Exception as e:
+                print(f"Failed to query index from responsible node: {e}")
+                # Fallback: check local index
+                return self.file_index.get(search_word.lower(), [])
+    
+    def query_index_from_node(self, search_word, target_node):
+        """Query index from a remote node"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10.0)
+            sock.connect(target_node)
+            
+            message = f"query_index {search_word} {self.host} {self.port}"
+            sock.send(message.encode('utf-8'))
+            
+            # Wait for response
+            response = sock.recv(4096).decode('utf-8')
+            sock.close()
+            
+            # Parse response
+            if response.startswith("index_results"):
+                parts = response.split(" ", 2)
+                if len(parts) >= 3:
+                    results_str = parts[2]
+                    if results_str == "EMPTY":
+                        return []
+                    
+                    # Parse results: filename1:word1,word2,word3|filename2:word4,word5|...
+                    results = []
+                    for entry in results_str.split("|"):
+                        if ":" in entry:
+                            filename, words_str = entry.split(":", 1)
+                            words = words_str.split(",") if words_str else []
+                            results.append((filename, words))
+                    return results
+            
+            return []
+            
+        except Exception as e:
+            sock.close() if sock else None
+            raise Exception(f"Index query failed: {e}")
+    
     
     def send_to_bootstrap(self, message):
         """Send message to bootstrap server and get response"""
@@ -139,6 +309,16 @@ class Node:
                             # This node is responsible for the file or lookup failed
                             self.files.append(file_name)
                             print(f"File {file_name} belongs to this node")
+                            
+                            # Create index entries for this file
+                            try:
+                                words = self.create_file_index_entry(file_name)
+                                for word in words:
+                                    self.store_index_entry(word, file_name, words)
+                                print(f"Created index entries for file {file_name}: {words}")
+                            except Exception as e:
+                                print(f"Failed to create index entries for {file_name}: {e}")
+                                
                         else:
                             # File should be moved to the responsible node
                             print(f"File {file_name} should be stored on {responsible_node}")
@@ -146,6 +326,15 @@ class Node:
                                 # Verify file exists before transfer
                                 file_path = os.path.join(node_dir, file_name)
                                 if os.path.exists(file_path):
+                                    # Create index entries before transferring file
+                                    try:
+                                        words = self.create_file_index_entry(file_name)
+                                        for word in words:
+                                            self.store_index_entry(word, file_name, words)
+                                        print(f"Created index entries for file {file_name}: {words}")
+                                    except Exception as e:
+                                        print(f"Failed to create index entries for {file_name}: {e}")
+                                    
                                     # Send file to responsible node
                                     self.transfer_file_to_node(file_name, responsible_node)
                                     # Remove from local directory after successful transfer
@@ -231,6 +420,103 @@ class Node:
                 soc.connect((message_list[1], int(message_list[2])))
                 soc.send(message.encode('utf-8'))
                 soc.close()
+
+        # Handle file indexing messages
+        if message_list[0] == "store_index_entry":
+            word = message_list[1]
+            filename = message_list[2]
+            other_words_str = message_list[3] if len(message_list) > 3 else ""
+            other_words = other_words_str.split(",") if other_words_str else []
+            
+            word_key = self.hasher(word)
+            
+            # Check if this node is responsible for this word
+            if self.is_responsible_for_key(word_key):
+                # Store the index entry on this node
+                if word not in self.file_index:
+                    self.file_index[word] = []
+                
+                # Check if this filename is already indexed for this word
+                existing_entry = None
+                for entry in self.file_index[word]:
+                    if entry[0] == filename:
+                        existing_entry = entry
+                        break
+                
+                if existing_entry:
+                    # Update existing entry
+                    existing_entry[1] = other_words
+                else:
+                    # Add new entry
+                    self.file_index[word].append((filename, other_words))
+                
+                print(f"Stored index entry: '{word}' -> '{filename}' with words {other_words}")
+            else:
+                # Forward to the next node
+                try:
+                    next_node = self.successor
+                    if next_node and next_node != (self.host, self.port):
+                        forward_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        forward_sock.connect(next_node)
+                        forward_message = f"store_index_entry {word} {filename} {other_words_str}"
+                        forward_sock.send(forward_message.encode('utf-8'))
+                        forward_sock.close()
+                        print(f"Forwarded index entry for '{word}' to {next_node}")
+                except Exception as e:
+                    print(f"Failed to forward index entry: {e}")
+            
+            client.close()
+
+        if message_list[0] == "query_index":
+            search_word = message_list[1].lower()
+            requester_host = message_list[2]
+            requester_port = int(message_list[3])
+            
+            word_key = self.hasher(search_word)
+            
+            # Check if this node is responsible for this word
+            if self.is_responsible_for_key(word_key):
+                # Get index results for this word
+                results = self.file_index.get(search_word, [])
+                
+                # Format response
+                if not results:
+                    response = "index_results EMPTY"
+                else:
+                    results_parts = []
+                    for filename, words in results:
+                        words_str = ",".join(words) if words else ""
+                        results_parts.append(f"{filename}:{words_str}")
+                    results_str = "|".join(results_parts)
+                    response = f"index_results {search_word} {results_str}"
+                
+                client.send(response.encode('utf-8'))
+            else:
+                # Forward to the next node
+                try:
+                    next_node = self.successor
+                    if next_node and next_node != (self.host, self.port):
+                        forward_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        forward_sock.settimeout(10.0)
+                        forward_sock.connect(next_node)
+                        forward_message = f"query_index {search_word} {requester_host} {requester_port}"
+                        forward_sock.send(forward_message.encode('utf-8'))
+                        
+                        # Get response and forward it back
+                        response = forward_sock.recv(4096).decode('utf-8')
+                        forward_sock.close()
+                        client.send(response.encode('utf-8'))
+                        print(f"Forwarded index query for '{search_word}' to {next_node}")
+                    else:
+                        # No successor, return empty
+                        client.send("index_results EMPTY".encode('utf-8'))
+                except Exception as e:
+                    print(f"Failed to forward index query: {e}")
+                    client.send("index_results EMPTY".encode('utf-8'))
+            
+            client.close()
+
+        ####################################### End of indexing messages
 
         ############################################# ping statements part 1
         # new node will recv this from old node
@@ -419,6 +705,17 @@ class Node:
                 mess = "error_file"
 
             self.files.append(message_list[1])
+            
+            # Create index entries for the received file
+            try:
+                filename = message_list[1]
+                words = self.create_file_index_entry(filename)
+                for word in words:
+                    self.store_index_entry(word, filename, words)
+                print(f"Created index entries for received file {filename}: {words}")
+            except Exception as e:
+                print(f"Failed to create index entries for received file {filename}: {e}")
+            
             # store file in system
             client.close()
             x_x = message_list[1]
@@ -1170,6 +1467,36 @@ class Node:
             print(f"Error retrieving file: {e}")
             return None
 
+
+    def search(self, search_term):
+        """Search for files by word in their names"""
+        search_words = self.extract_words_from_filename(search_term)
+        if not search_words:
+            print("No valid search words found")
+            return []
+        
+        print(f"Searching for files containing words: {search_words}")
+        
+        all_results = {}  # {filename: [matching_words]}
+        
+        # Search for each word
+        for word in search_words:
+            try:
+                word_results = self.search_word_in_index(word)
+                for filename, all_words in word_results:
+                    if filename not in all_results:
+                        all_results[filename] = []
+                    all_results[filename].append(word)
+                    
+            except Exception as e:
+                print(f"Error searching for word '{word}': {e}")
+        
+        # Convert results to list format
+        final_results = []
+        for filename, matching_words in all_results.items():
+            final_results.append((filename, matching_words))
+        
+        return final_results
 
     def transfer_files_before_leaving(self):
         """Transfer files to successor and predecessor before leaving the network"""

@@ -21,6 +21,8 @@ A robust distributed hash table (DHT) based file sharing system implementing the
 ### 🔧 **Advanced Features**
 - **Consistent Hashing**: Uses MD5 hashing with 16-bit key space (65,536 positions)
 - **File Lookup**: Efficient O(log N) lookup time for file location
+- **Distributed File Indexing**: Files are automatically indexed by filename words for fast search
+- **Multi-word Search**: Search for files using any words from their filenames
 - **Multi-threaded**: Concurrent handling of multiple operations
 - **Interactive CLI**: User-friendly command-line interface for each node
 
@@ -84,6 +86,7 @@ A robust distributed hash table (DHT) based file sharing system implementing the
 
 - **`put <filename>`** - Manually store a file in the network
 - **`get <filename>`** - Retrieve a file from the network
+- **`search <term>`** - Search for files by filename words
 - **`status`** - Show node information and file lists
 - **`leave`** - Gracefully leave the network (transfers files)
 - **`quit`** - Fast exit with file transfer (recommended)
@@ -100,6 +103,15 @@ Backup Files: ['backup1.txt', 'backup2.txt']
 
 [localhost:8001]> get shared_file.txt
 File 'shared_file.txt' retrieved successfully
+
+[localhost:8001]> search learning
+Found 2 files matching 'learning':
+  1. machine_learning_algorithms_notes.txt (matched words: learning)
+  2. deep_learning_tutorial.pdf (matched words: learning)
+
+[localhost:8001]> search database systems
+Found 1 files matching 'database systems':
+  1. database_management_systems_guide.txt (matched words: database, systems)
 
 [localhost:8001]> quit
 Shutting down node and transferring files...
@@ -136,8 +148,61 @@ Files are stored on the node whose key is equal to or immediately follows the fi
 
 1. **Primary Storage**: Files are stored on the responsible node (determined by hash)
 2. **Backup Storage**: Files are also backed up on the predecessor node
-3. **Transfer on Leave**: When nodes leave, files are randomly distributed to successor and predecessor
-4. **Recovery**: Files can be retrieved from backup if primary node fails
+3. **Index Distribution**: Each word from filenames is indexed on the responsible node for that word
+4. **Transfer on Leave**: When nodes leave, files are randomly distributed to successor and predecessor
+5. **Recovery**: Files can be retrieved from backup if primary node fails
+
+## File Indexing and Search
+
+The system automatically creates a distributed index for efficient file searching:
+
+### Indexing Process
+1. **Word Extraction**: Filenames are split into individual words (e.g., "machine_learning_notes.txt" → ["machine", "learning", "notes"])
+2. **Hash Distribution**: Each word is hashed and stored on the responsible node
+3. **Index Entry**: Contains the word, full filename, and all other words in the title
+4. **Automatic Updates**: Index entries are created when files are added (both manually and automatically)
+
+### Search Functionality
+- **Multi-word Support**: Search for files using any combination of words
+- **Distributed Queries**: Search queries are routed to the appropriate nodes
+- **Relevance Display**: Shows which words matched for each result
+- **Real-time Results**: Index is updated as files are added or removed
+
+### Example Searches
+```bash
+# Search for files containing "machine"
+search machine
+# Results: machine_learning_algorithms_notes.txt
+
+# Search for files containing "database" or "systems"  
+search database systems
+# Results: database_management_systems_guide.txt (matched: database, systems)
+
+# Search across the distributed network
+search learning
+# Results from any node, regardless of where files are stored
+
+# Multi-word search with relevance
+search distributed computing
+# Results: distributed_systems_project_report.txt (matched: distributed)
+#          distributed_computing_notes.doc (matched: distributed, computing)
+```
+
+## Recent Fixes (Phase 2 Implementation)
+
+### ✅ **Distributed Search Issues Resolved**
+- **Fixed distributed lookup**: Index queries now properly route through the DHT ring
+- **Enhanced message forwarding**: Index operations correctly forward to responsible nodes
+- **Improved key responsibility**: Better logic for determining which node stores index entries
+- **Added fault tolerance**: Fallback mechanisms when distributed operations fail
+- **Preserved existing functionality**: All original file operations remain intact
+
+### 🔧 **Technical Improvements**
+- **Proper DHT routing**: Index entries use the same routing logic as file operations
+- **Message forwarding**: `store_index_entry` and `query_index` messages forward through ring
+- **Responsibility checking**: `is_responsible_for_key()` method for accurate key ownership
+- **Error handling**: Graceful degradation when network operations fail
+- **Integration**: Seamless integration with existing file discovery and storage
 
 ## Error Handling
 
