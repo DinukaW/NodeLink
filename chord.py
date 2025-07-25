@@ -4,6 +4,8 @@ import os
 import time
 import hashlib
 import re
+import logging
+from datetime import datetime
 
 
 class Node:
@@ -52,6 +54,10 @@ class Node:
 
         if not os.path.exists(host+"_"+str(port)):
             os.mkdir(host+"_"+str(port))
+        
+        # Setup logging for this node
+        self.setup_logging()
+        
         '''
         ------------------------------------------------------------------------------------
         DO NOT EDIT ANYTHING ABOVE THIS LINE
@@ -71,6 +77,45 @@ class Node:
     def hasher(self, key):
         '''nn'''
         return int(hashlib.md5(key.encode()).hexdigest(), 16) % self.N
+    
+    def setup_logging(self):
+        """Setup logging for this node"""
+        # Create logs directory if it doesn't exist
+        logs_dir = "logs"
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+        
+        # Create a logger for this specific node
+        self.logger = logging.getLogger(f"node_{self.host}_{self.port}")
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Clear any existing handlers
+        self.logger.handlers.clear()
+        
+        # Create file handler
+        log_file = os.path.join(logs_dir, f"node_{self.host}_{self.port}.log")
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Create console handler (for critical errors only)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.ERROR)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        # Add handlers to logger
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        # Log startup
+        self.logger.info(f"Node initialized: {self.host}:{self.port} with key {self.key}")
     
     def extract_words_from_filename(self, filename):
         """Extract words from filename for indexing"""
@@ -98,34 +143,38 @@ class Node:
                 self.file_index[word] = []
             
             # Check if this filename is already indexed for this word
-            existing_entry = None
-            for entry in self.file_index[word]:
+            existing_entry_index = None
+            for i, entry in enumerate(self.file_index[word]):
                 if entry[0] == filename:
-                    existing_entry = entry
+                    existing_entry_index = i
                     break
             
-            if existing_entry:
-                # Update existing entry
-                existing_entry[1] = all_words
+            if existing_entry_index is not None:
+                # Update existing entry by replacing the tuple
+                self.file_index[word][existing_entry_index] = (filename, all_words)
             else:
                 # Add new entry
                 self.file_index[word].append((filename, all_words))
             
             print(f"Indexed word '{word}' for file '{filename}' on this node")
+            self.logger.debug(f"Indexed word '{word}' for file '{filename}' on this node")
         else:
             # Send index entry to responsible node using distributed lookup
             try:
                 responsible_node = self.find_responsible_node_for_key(word_key)
                 if responsible_node and responsible_node != (self.host, self.port):
                     self.send_index_entry_to_node(word, filename, all_words, responsible_node)
+                    self.logger.debug(f"Sent index entry for word '{word}' to node {responsible_node}")
                     print(f"Sent index entry for word '{word}' to node {responsible_node}")
                 else:
                     # Fallback: store locally if can't find responsible node
                     if word not in self.file_index:
                         self.file_index[word] = []
                     self.file_index[word].append((filename, all_words))
+                    self.logger.warning(f"Stored index entry for word '{word}' locally (fallback)")
                     print(f"Stored index entry for word '{word}' locally (fallback)")
             except Exception as e:
+                self.logger.error(f"Failed to send index entry for word '{word}': {e}")
                 print(f"Failed to send index entry for word '{word}': {e}")
                 # Fallback: store locally
                 if word not in self.file_index:
@@ -247,12 +296,15 @@ class Node:
             sock.close()
             return response
         except socket.timeout:
+            self.logger.warning("Bootstrap server timeout")
             print("Bootstrap server timeout")
             return None
         except ConnectionRefusedError:
+            self.logger.error("Bootstrap server not available")
             print("Bootstrap server not available")
             return None
         except Exception as e:
+            self.logger.error(f"Error communicating with bootstrap server: {e}")
             print(f"Error communicating with bootstrap server: {e}")
             return None
     
@@ -293,6 +345,7 @@ class Node:
                     # Find new files to add
                     new_files = current_files - tracked_files
                     for file_name in new_files:
+                        self.logger.info(f"Auto-discovered file: {file_name}")
                         print(f"Auto-discovered file: {file_name}")
                         # Check if this file should be stored on this node based on hash
                         file_id = int(self.hasher(file_name))
@@ -308,6 +361,7 @@ class Node:
                         if responsible_node == (self.host, self.port) or responsible_node == (" ", 0):
                             # This node is responsible for the file or lookup failed
                             self.files.append(file_name)
+                            self.logger.info(f"File {file_name} belongs to this node (key: {file_id})")
                             print(f"File {file_name} belongs to this node")
                             
                             # Create index entries for this file
@@ -315,12 +369,15 @@ class Node:
                                 words = self.create_file_index_entry(file_name)
                                 for word in words:
                                     self.store_index_entry(word, file_name, words)
+                                self.logger.debug(f"Created index entries for file {file_name}: {words}")
                                 print(f"Created index entries for file {file_name}: {words}")
                             except Exception as e:
+                                self.logger.error(f"Failed to create index entries for {file_name}: {e}")
                                 print(f"Failed to create index entries for {file_name}: {e}")
                                 
                         else:
                             # File should be moved to the responsible node
+                            self.logger.info(f"File {file_name} should be stored on {responsible_node} (key: {file_id})")
                             print(f"File {file_name} should be stored on {responsible_node}")
                             try:
                                 # Verify file exists before transfer
@@ -331,18 +388,23 @@ class Node:
                                         words = self.create_file_index_entry(file_name)
                                         for word in words:
                                             self.store_index_entry(word, file_name, words)
+                                        self.logger.debug(f"Created index entries for file {file_name}: {words}")
                                         print(f"Created index entries for file {file_name}: {words}")
                                     except Exception as e:
+                                        self.logger.error(f"Failed to create index entries for {file_name}: {e}")
                                         print(f"Failed to create index entries for {file_name}: {e}")
                                     
                                     # Send file to responsible node
                                     self.transfer_file_to_node(file_name, responsible_node)
                                     # Remove from local directory after successful transfer
                                     os.remove(file_path)
+                                    self.logger.info(f"Transferred {file_name} to {responsible_node}")
                                     print(f"Transferred {file_name} to {responsible_node}")
                                 else:
+                                    self.logger.warning(f"File {file_name} does not exist for transfer")
                                     print(f"File {file_name} does not exist for transfer")
                             except Exception as e:
+                                self.logger.error(f"Failed to transfer {file_name}: {e}")
                                 print(f"Failed to transfer {file_name}: {e}")
                                 # Keep the file locally if transfer fails
                                 if file_name not in self.files:
@@ -356,6 +418,7 @@ class Node:
                             self.files.remove(file_name)
                             
             except Exception as e:
+                self.logger.error(f"File discovery error: {e}")
                 print(f"File discovery error: {e}")
             
             # Check every 5 seconds
@@ -437,15 +500,15 @@ class Node:
                     self.file_index[word] = []
                 
                 # Check if this filename is already indexed for this word
-                existing_entry = None
-                for entry in self.file_index[word]:
+                existing_entry_index = None
+                for i, entry in enumerate(self.file_index[word]):
                     if entry[0] == filename:
-                        existing_entry = entry
+                        existing_entry_index = i
                         break
                 
-                if existing_entry:
-                    # Update existing entry
-                    existing_entry[1] = other_words
+                if existing_entry_index is not None:
+                    # Update existing entry by replacing the tuple
+                    self.file_index[word][existing_entry_index] = (filename, other_words)
                 else:
                     # Add new entry
                     self.file_index[word].append((filename, other_words))
@@ -1176,6 +1239,7 @@ class Node:
                 # This is the first node in the network
                 self.successor = (self.host, self.port)
                 self.predecessor = (self.host, self.port)
+                self.logger.info(f"Joined as first node with key {self.key}")
                 print(f"Joined as first node with key {self.key}")
                 
             elif response_parts[0] == "join_position":
@@ -1190,9 +1254,11 @@ class Node:
                 
                 # Notify successor and predecessor
                 self.notify_successor_predecessor()
+                self.logger.info(f"Joined network with key {self.key}, successor: {self.successor}, predecessor: {self.predecessor}")
                 print(f"Joined network with key {self.key}, successor: {self.successor}, predecessor: {self.predecessor}")
                 
             else:
+                self.logger.error(f"Bootstrap server error: {response}")
                 print(f"Bootstrap server error: {response}")
                 return False
                 

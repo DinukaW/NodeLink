@@ -5,6 +5,8 @@ import threading
 import time
 import hashlib
 import json
+import logging
+import os
 from datetime import datetime
 
 class BootstrapServer:
@@ -19,6 +21,9 @@ class BootstrapServer:
         self.nodes = {}  # {(host, port): {"key": key, "successor": tuple, "predecessor": tuple, "last_heartbeat": timestamp}}
         self.nodes_lock = threading.Lock()
         
+        # Setup logging
+        self.setup_logging()
+        
         # Start the server
         self.server_socket = None
         self.start_server()
@@ -31,6 +36,45 @@ class BootstrapServer:
     def hasher(self, key):
         """Hash function consistent with Node class"""
         return int(hashlib.md5(key.encode()).hexdigest(), 16) % self.N
+    
+    def setup_logging(self):
+        """Setup logging for bootstrap server"""
+        # Create logs directory if it doesn't exist
+        logs_dir = "logs"
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+        
+        # Create a logger for the bootstrap server
+        self.logger = logging.getLogger(f"bootstrap_server_{self.host}_{self.port}")
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Clear any existing handlers
+        self.logger.handlers.clear()
+        
+        # Create file handler
+        log_file = os.path.join(logs_dir, f"bootstrap_server_{self.host}_{self.port}.log")
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Create console handler (for critical errors only)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.ERROR)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        # Add handlers to logger
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        # Log startup
+        self.logger.info(f"Bootstrap server initialized on {self.host}:{self.port}")
     
     def start_server(self):
         """Start the bootstrap server"""
@@ -107,6 +151,7 @@ class BootstrapServer:
                         "last_heartbeat": time.time()
                     }
                     client_socket.send(f"first_node {node_host} {node_port}".encode('utf-8'))
+                    self.logger.info(f"Registered first node: {node_addr} with key {node_key}")
                 else:
                     # Find appropriate position in the ring
                     successor_addr = self.find_successor(node_key)
@@ -127,10 +172,12 @@ class BootstrapServer:
                     self.nodes[predecessor_addr]["successor"] = node_addr
                     
                     client_socket.send(f"join_position {successor_addr[0]} {successor_addr[1]} {predecessor_addr[0]} {predecessor_addr[1]}".encode('utf-8'))
+                    self.logger.info(f"Registered node: {node_addr} with key {node_key}, successor: {successor_addr}, predecessor: {predecessor_addr}")
                     
             print(f"Node {node_addr} registered with key {node_key}")
             
         except Exception as e:
+            self.logger.error(f"Error in handle_register: {e}")
             print(f"Error in handle_register: {e}")
             client_socket.send("error registration_failed".encode('utf-8'))
         finally:
@@ -203,6 +250,7 @@ class BootstrapServer:
                 if node_addr in self.nodes:
                     self.remove_node(node_addr)
                     client_socket.send("ack".encode('utf-8'))
+                    self.logger.info(f"Node {node_addr} left the network")
                     print(f"Node {node_addr} left the network")
                 else:
                     client_socket.send("error not_registered".encode('utf-8'))
@@ -329,6 +377,7 @@ class BootstrapServer:
                         
                 # Remove failed nodes
                 for addr in failed_nodes:
+                    self.logger.warning(f"Node {addr} failed - removing from network")
                     print(f"Node {addr} failed - removing from network")
                     self.remove_node(addr)
     

@@ -26,6 +26,7 @@ localhost_*/
 
 # Logs
 *.log
+logs/
 
 # Development files
 test_*.py

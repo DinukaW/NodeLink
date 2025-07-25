@@ -3,6 +3,7 @@
 import sys
 import time
 from chord import Node
+import logging
 
 def main():
     if len(sys.argv) < 3:
