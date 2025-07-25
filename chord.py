@@ -5,7 +5,16 @@ import time
 import hashlib
 import re
 import logging
+import random
 from datetime import datetime
+
+# Import metrics module
+try:
+    from chord_metrics import ChordMetrics
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    print("Warning: chord_metrics module not available. Metrics will be disabled.")
 
 
 class Node:
@@ -30,6 +39,10 @@ class Node:
         # File indexing system - Phase 2
         self.file_index = {}  # {word: [(filename, [other_words])]}
         self.backup_index = {}  # Backup of index entries
+        
+        # Initialize metrics (default metrics port is node_port + 1000)
+        metrics_port = port + 1000 if METRICS_AVAILABLE else None
+        self.metrics = ChordMetrics(f"{host}:{port}", metrics_port) if METRICS_AVAILABLE else None
         
         self.position = ()
         self.succ_changed_bool = False
@@ -72,6 +85,10 @@ class Node:
         
         # Start file discovery thread
         threading.Thread(target=self.discover_files, daemon=True).start()
+        
+        # Start metrics update thread
+        if self.metrics:
+            threading.Thread(target=self.update_metrics_periodically, daemon=True).start()
 
 
     def hasher(self, key):
@@ -234,23 +251,41 @@ class Node:
         """Search for files containing a specific word"""
         word_key = self.hasher(search_word.lower())
         
-        # Check if this node is responsible for this word
-        if self.is_responsible_for_key(word_key):
-            # This node has the index for this word
-            return self.file_index.get(search_word.lower(), [])
-        else:
-            # Query the responsible node
-            try:
-                responsible_node = self.find_responsible_node_for_key(word_key)
-                if responsible_node and responsible_node != (self.host, self.port):
-                    return self.query_index_from_node(search_word, responsible_node)
-                else:
-                    # Fallback: check local index
+        # Track query metrics
+        if self.metrics:
+            with self.metrics.time_query('index_search') as query_timer:
+                # Check if this node is responsible for this word
+                if self.is_responsible_for_key(word_key):
+                    # This node has the index for this word
                     return self.file_index.get(search_word.lower(), [])
-            except Exception as e:
-                print(f"Failed to query index from responsible node: {e}")
-                # Fallback: check local index
+                else:
+                    # Query the responsible node
+                    try:
+                        responsible_node = self.find_responsible_node_for_key(word_key)
+                        if responsible_node and responsible_node != (self.host, self.port):
+                            query_timer.add_hop()  # Add hop for remote query
+                            return self.query_index_from_node(search_word, responsible_node)
+                        else:
+                            # Fallback: check local index
+                            return self.file_index.get(search_word.lower(), [])
+                    except Exception as e:
+                        print(f"Failed to query index from responsible node: {e}")
+                        # Fallback: check local index
+                        return self.file_index.get(search_word.lower(), [])
+        else:
+            # Original code without metrics
+            if self.is_responsible_for_key(word_key):
                 return self.file_index.get(search_word.lower(), [])
+            else:
+                try:
+                    responsible_node = self.find_responsible_node_for_key(word_key)
+                    if responsible_node and responsible_node != (self.host, self.port):
+                        return self.query_index_from_node(search_word, responsible_node)
+                    else:
+                        return self.file_index.get(search_word.lower(), [])
+                except Exception as e:
+                    print(f"Failed to query index from responsible node: {e}")
+                    return self.file_index.get(search_word.lower(), [])
     
     def query_index_from_node(self, search_word, target_node):
         """Query index from a remote node"""
@@ -329,6 +364,69 @@ class Node:
                 if self.stop:
                     break
                 time.sleep(0.1)
+    
+    def update_metrics_periodically(self):
+        """Update metrics periodically"""
+        while not self.stop:
+            try:
+                if self.metrics:
+                    # Update file counts
+                    files_count = len(self.files)
+                    index_count = sum(len(entries) for entries in self.file_index.values())
+                    backup_count = len(self.backUpFiles)
+                    self.metrics.update_file_counts(files_count, index_count, backup_count)
+                    
+                    # Update neighbor count (successor + predecessor, excluding self)
+                    neighbors = 0
+                    if self.successor != (self.host, self.port):
+                        neighbors += 1
+                    if self.predecessor != (self.host, self.port):
+                        neighbors += 1
+                    self.metrics.update_neighbors_count(neighbors)
+                    
+            except Exception as e:
+                print(f"Metrics update error: {e}")
+            
+            # Update every 10 seconds
+            for _ in range(100):  # 10 seconds total, check stop every 0.1s
+                if self.stop:
+                    break
+                time.sleep(0.1)
+    
+    def send_message_with_metrics(self, target_node, message, message_type=None):
+        """Send a message and track metrics"""
+        if message_type is None:
+            # Extract message type from message
+            message_type = message.split()[0] if message.strip() else "unknown"
+        
+        # Record message sent
+        if self.metrics:
+            target_str = f"{target_node[0]}:{target_node[1]}" if isinstance(target_node, tuple) else str(target_node)
+            self.metrics.record_message_sent(message_type, target_str)
+        
+        # Send the message
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.connect(target_node)
+            sock.send(message.encode('utf-8'))
+            return sock
+        except Exception as e:
+            sock.close()
+            raise e
+    
+    def set_successor(self, new_successor):
+        """Set successor and track metrics"""
+        old_successor = self.successor
+        self.successor = new_successor
+        if self.metrics and old_successor != new_successor:
+            self.metrics.record_successor_change()
+    
+    def set_predecessor(self, new_predecessor):
+        """Set predecessor and track metrics"""
+        old_predecessor = self.predecessor
+        self.predecessor = new_predecessor
+        if self.metrics and old_predecessor != new_predecessor:
+            self.metrics.record_predecessor_change()
     
     def discover_files(self):
         """Automatically discover files in the node's directory"""
@@ -465,8 +563,31 @@ class Node:
 
     def handleConnection(self, client, addr):
         '''nn'''
+        start_time = time.time()
         incoming_message = client.recv(1024).decode('utf-8')
         message_list = incoming_message.split()
+        
+        if not message_list:
+            client.close()
+            return
+            
+        message_type = message_list[0]
+        source_node = f"{addr[0]}:{addr[1]}"
+        
+        # Record message received
+        if self.metrics:
+            self.metrics.record_message_received(message_type, source_node)
+        
+        # Use context manager for processing time tracking
+        if self.metrics:
+            with self.metrics.time_message_processing(message_type):
+                self._handle_message_content(client, addr, message_list)
+        else:
+            self._handle_message_content(client, addr, message_list)
+    
+    def _handle_message_content(self, client, addr, message_list):
+        """Handle the actual message content (separated for metrics)"""
+        message_type = message_list[0]
 
         if message_list[0] =="lookup":
             client.close()

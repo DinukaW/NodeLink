@@ -1,0 +1,10 @@
+# Core dependencies for Chord DHT system
+flask>=2.0.0
+werkzeug>=2.0.0
+requests>=2.25.0
+
+# Performance monitoring dependencies
+prometheus_client>=0.14.0
+
+# Optional: For enhanced logging and metrics
+psutil>=5.8.0

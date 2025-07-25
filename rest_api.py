@@ -108,6 +108,20 @@ class ChordRESTAPI:
                 'api_port': self.api_port
             })
         
+        @self.app.route('/metrics', methods=['GET'])
+        def get_metrics():
+            """Prometheus metrics endpoint"""
+            try:
+                if not self.chord_node or not hasattr(self.chord_node, 'metrics') or not self.chord_node.metrics:
+                    return "# Metrics not available - prometheus_client not installed or metrics disabled\n", 200, {'Content-Type': 'text/plain'}
+                
+                metrics_data = self.chord_node.metrics.get_metrics()
+                return metrics_data, 200, {'Content-Type': 'text/plain'}
+                
+            except Exception as e:
+                self.logger.error(f"Metrics endpoint error: {e}")
+                return f"# Error retrieving metrics: {e}\n", 500, {'Content-Type': 'text/plain'}
+        
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
             """Upload a file to the Chord network"""

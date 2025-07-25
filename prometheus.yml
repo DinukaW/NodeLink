@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'chord-dht-nodes'
+    static_configs:
+      - targets: 
+          - 'host.docker.internal:9001'  # Node 1 metrics (port 8001 + 1000)
+          - 'host.docker.internal:9002'  # Node 2 metrics (port 8002 + 1000)  
+          - 'host.docker.internal:9003'  # Node 3 metrics (port 8003 + 1000)
+    scrape_interval: 5s
+    metrics_path: /metrics
+    
+  - job_name: 'chord-rest-api'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:5001'  # REST API 1
+          - 'host.docker.internal:5002'  # REST API 2
+          - 'host.docker.internal:5003'  # REST API 3
+    scrape_interval: 5s
+    metrics_path: /metrics

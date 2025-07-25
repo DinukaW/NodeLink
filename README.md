@@ -16,6 +16,7 @@ A distributed hash table (DHT) implementation of the Chord protocol for file sha
 ### Prerequisites
 - Python 3.7+
 - For REST API: `pip install flask werkzeug requests`
+- For Monitoring: `pip install prometheus_client` + Docker
 
 ### Setup
 
@@ -52,6 +53,29 @@ A distributed hash table (DHT) implementation of the Chord protocol for file sha
 - `GET /download/<filename>` - Download file
 - `GET /node/status` - Node status
 - `GET /health` - Health check
+- `GET /metrics` - Prometheus metrics endpoint
+
+## Performance Monitoring
+
+The system includes comprehensive Prometheus metrics and Grafana dashboards:
+
+```bash
+# Setup monitoring stack
+python3 setup_monitoring.py
+
+# Access monitoring
+# Prometheus: http://localhost:9090
+# Grafana: http://localhost:3000 (admin/admin)
+```
+
+**Metrics tracked:**
+- Query hop count and latency
+- Message traffic and processing time  
+- Node connectivity and topology changes
+- Query cost: α × hop_count + β × latency
+- Node cost: δ × messages + ζ × processing_time
+
+See `MONITORING.md` for detailed documentation.
 
 ### Example Usage
 
