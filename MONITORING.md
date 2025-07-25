@@ -137,7 +137,7 @@ curl -X POST http://localhost:5002/node/leave
 curl http://localhost:5001/metrics | grep chord_successor_changes
 ```
 
-## 📊 Grafana Dashboard
+## 📊 Grafana Dashboard ( <span style="color:red">🚧 Under Development 🚧</span> )
 
 The included dashboard provides visualization for:
 
@@ -163,14 +163,6 @@ self.alpha = 1.0   # Hop count weight
 self.beta = 100.0  # Latency weight  
 self.delta = 0.1   # Message count weight
 self.zeta = 10.0   # Processing time weight
-```
-
-### Custom Metrics Port
-By default, metrics servers run on `node_port + 1000`. To customize:
-```python
-# In chord.py Node.__init__()
-metrics_port = port + 2000  # Custom offset
-self.metrics = ChordMetrics(f"{host}:{port}", metrics_port)
 ```
 
 ## 🔍 Troubleshooting
@@ -210,14 +202,3 @@ Identify high-cost operations:
 chord_query_cost > 5.0
 ```
 
-## 🚀 Production Deployment
-
-For production monitoring:
-
-1. **Scale Prometheus**: Configure retention and storage
-2. **Setup Alerting**: Add Prometheus alert rules
-3. **Backup Metrics**: Configure Grafana backup
-4. **Security**: Add authentication and HTTPS
-5. **Network**: Configure service discovery for dynamic nodes
-
-This comprehensive monitoring system provides the foundation for thorough performance analysis and optimization of the Chord DHT system!

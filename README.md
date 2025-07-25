@@ -27,6 +27,8 @@ A distributed hash table (DHT) implementation of the Chord protocol for file sha
 
 2. **Start CLI Nodes**
    ```bash
+   python3 chord_cli.py localhost <NODE_PORT>
+
    python3 chord_cli.py localhost 8001
    python3 chord_cli.py localhost 8002
    python3 chord_cli.py localhost 8003
@@ -34,6 +36,8 @@ A distributed hash table (DHT) implementation of the Chord protocol for file sha
 
 3. **Or Start REST API Nodes**
    ```bash
+   python3 rest_api.py <API_PORT> <NODE_PORT>
+
    python3 rest_api.py 5001 8001
    python3 rest_api.py 5002 8002
    ```
@@ -86,13 +90,76 @@ See `MONITORING.md` for detailed documentation.
 [localhost:8001]> get document.txt
 ```
 
-**REST API:**
-```bash
-curl -X POST -F "file=@doc.txt" http://localhost:5001/upload
-curl "http://localhost:5001/search?q=document"
-curl -O http://localhost:5001/download/doc.txt
-```
+**REST API Examples:**
 
+**1. Health & Status Endpoints**
+```bash
+# Health check
+curl http://localhost:<API_PORT>/health 
+
+# Node status (detailed network info)
+curl http://localhost:<API_PORT>/node/status 
+
+# Bootstrap server status
+curl http://localhost:<API_PORT>/bootstrap/status 
+
+# Prometheus metrics (NEW!)
+curl http://localhost:<API_PORT>/metrics
+```
+**2. File Operations**
+```bash
+# Upload a file
+curl -X POST -F "file=@document.txt" http://localhost:<API_PORT>/upload
+
+# If you're in the main project directory and file is in files/
+curl -X POST -F "file=@files/document.txt" http://localhost:<API_PORT>/upload
+
+# List all files on node
+curl http://localhost:<API_PORT>/files/list
+
+```
+**3. File Search**
+```bash
+# Search for files containing "machine"
+curl "http://localhost:<API_PORT>/search?q=machine"
+
+# Search with multiple terms
+curl "http://localhost:<API_PORT>/search?q=protocol+design"
+
+```
+**4. File Download**
+```bash
+# Download a file
+curl -O http://localhost:<API_PORT>/download/document.txt
+
+# Download with custom filename
+curl -o my_document.txt http://localhost:<API_PORT>/download/document.txt
+
+```
+**5. Network Management**
+```bash
+# Make node leave network gracefully (shuts down server)
+curl -X POST http://localhost:<API_PORT>/node/leave
+
+# Leave with verbose output
+curl -X POST http://localhost:<API_PORT>/node/leave -v
+```
+**6. Performance Monitoring**
+```bash
+# Get Prometheus metrics
+curl http://localhost:<API_PORT>/metrics
+
+# Get specific metric categories
+curl http://localhost:<API_PORT>/metrics | grep chord_query
+curl http://localhost:<API_PORT>/metrics | grep chord_message
+curl http://localhost:<API_PORT>/metrics | grep chord_node
+
+# Query cost metrics
+curl http://localhost:<API_PORT>/metrics | grep chord_query_cost
+
+# Node cost metrics  
+curl http://localhost:<API_PORT>/metrics | grep chord_node_cost
+```
 ## Files
 
 - `chord.py` - Core Chord DHT implementation
@@ -100,6 +167,4 @@ curl -O http://localhost:5001/download/doc.txt
 - `rest_api.py` - REST API server
 - `bootstrap_server.py` - Network coordination server
 
-## License
 
-Open source project for educational purposes.
