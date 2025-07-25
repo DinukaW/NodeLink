@@ -5,7 +5,7 @@
 2. ✅ Empty successor/predecessor tuples - Fixed message handling
 3. ✅ File operations hanging - Added proper timeouts and error handling
 4. ✅ File path issues in put command - Fixed file path resolution
-5. ✅ Bootstrap server port consistency - Now uses port 9000 everywhere
+5. ✅ Bootstrap server port consistency - Now uses port 5000 everywhere
 
 ## Quick Start (Terminal Commands):
 
@@ -17,7 +17,7 @@ python3 setup_test_files.py
 ### Step 2: Start Bootstrap Server (Terminal 1)
 ```bash
 python3 bootstrap_server.py
-# Should show: Bootstrap server started on localhost:9000
+# Should show: Bootstrap server started on localhost:5000
 ```
 
 ### Step 3: Start Nodes (Separate Terminals)
@@ -81,7 +81,7 @@ In bootstrap server terminal:
 - Now looks for files in `localhost_XXXX/` directories
 
 ### 4. Bootstrap Communication
-- Consistent port usage (9000)
+- Consistent port usage (5000)
 - Better error messages
 - Timeout handling for bootstrap server communication
 

@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 
 class BootstrapServer:
-    def __init__(self, host="localhost", port=9000):
+    def __init__(self, host="localhost", port=5000):
         self.host = host
         self.port = port
         self.stop = False
@@ -270,6 +270,47 @@ class BootstrapServer:
             
         # Remove the node
         del self.nodes[node_addr]
+        
+        # Notify affected nodes about the topology change
+        self.notify_topology_change(successor_addr, predecessor_addr)
+    
+    def notify_topology_change(self, successor_addr, predecessor_addr):
+        """Notify nodes about topology changes when a node leaves"""
+        try:
+            # Notify successor about new predecessor
+            if successor_addr in self.nodes:
+                threading.Thread(target=self.send_topology_update, 
+                               args=(successor_addr, "update_predecessor", predecessor_addr), 
+                               daemon=True).start()
+            
+            # Notify predecessor about new successor  
+            if predecessor_addr in self.nodes:
+                threading.Thread(target=self.send_topology_update,
+                               args=(predecessor_addr, "update_successor", successor_addr),
+                               daemon=True).start()
+        except Exception as e:
+            print(f"Error notifying topology change: {e}")
+    
+    def send_topology_update(self, target_addr, update_type, new_addr):
+        """Send topology update to a specific node"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect(target_addr)
+            
+            if update_type == "update_predecessor":
+                message = f"topology_update_pred {new_addr[0]} {new_addr[1]}"
+            elif update_type == "update_successor":
+                message = f"topology_update_succ {new_addr[0]} {new_addr[1]}"
+            else:
+                return
+                
+            sock.send(message.encode('utf-8'))
+            sock.close()
+            print(f"Sent topology update to {target_addr}: {update_type} -> {new_addr}")
+            
+        except Exception as e:
+            print(f"Failed to send topology update to {target_addr}: {e}")
     
     def monitor_heartbeats(self):
         """Monitor node heartbeats and remove failed nodes"""
@@ -310,7 +351,7 @@ def main():
     import sys
     
     host = "localhost"
-    port = 9000
+    port = 5000
     
     if len(sys.argv) >= 2:
         port = int(sys.argv[1])

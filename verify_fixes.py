@@ -32,8 +32,8 @@ def check_bootstrap_port():
     try:
         with open("bootstrap_server.py", "r") as f:
             content = f.read()
-            if "port=9000" in content:
-                print("✅ Bootstrap server using port 9000")
+            if "port=5000" in content:
+                print("✅ Bootstrap server using port 5000")
                 return True
             else:
                 print("❌ Bootstrap server port configuration issue")
@@ -49,8 +49,8 @@ def check_chord_port():
     try:
         with open("chord.py", "r") as f:
             content = f.read()
-            if "bootstrap_port=9000" in content:
-                print("✅ Chord nodes using bootstrap port 9000")
+            if "bootstrap_port=5000" in content:
+                print("✅ Chord nodes using bootstrap port 5000")
                 return True
             else:
                 print("❌ Chord node bootstrap port configuration issue")

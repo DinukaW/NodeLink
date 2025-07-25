@@ -57,6 +57,9 @@ class Node:
         
         # Start heartbeat to bootstrap server
         self.heartbeat_thread = None
+        
+        # Start file discovery thread
+        threading.Thread(target=self.discover_files, daemon=True).start()
 
 
     def hasher(self, key):
@@ -99,6 +102,109 @@ class Node:
                 if self.stop:
                     break
                 time.sleep(0.1)
+    
+    def discover_files(self):
+        """Automatically discover files in the node's directory"""
+        node_dir = f"{self.host}_{self.port}"
+        
+        while not self.stop:
+            try:
+                if os.path.exists(node_dir):
+                    # Get current files in directory
+                    current_files = set()
+                    for file_name in os.listdir(node_dir):
+                        file_path = os.path.join(node_dir, file_name)
+                        if os.path.isfile(file_path) and not file_name.startswith('.'):
+                            current_files.add(file_name)
+                    
+                    # Get files currently tracked by this node
+                    tracked_files = set(self.files)
+                    
+                    # Find new files to add
+                    new_files = current_files - tracked_files
+                    for file_name in new_files:
+                        print(f"Auto-discovered file: {file_name}")
+                        # Check if this file should be stored on this node based on hash
+                        file_id = int(self.hasher(file_name))
+                        responsible_node = self.lookup_file(file_id, file_name, (self.host, self.port))
+                        
+                        # Wait for lookup to complete
+                        timeout_count = 0
+                        while responsible_node == (" ", 0) and timeout_count < 10:
+                            time.sleep(0.1)
+                            timeout_count += 1
+                            responsible_node = self.lookup_file(file_id, file_name, (self.host, self.port))
+                        
+                        if responsible_node == (self.host, self.port) or responsible_node == (" ", 0):
+                            # This node is responsible for the file or lookup failed
+                            self.files.append(file_name)
+                            print(f"File {file_name} belongs to this node")
+                        else:
+                            # File should be moved to the responsible node
+                            print(f"File {file_name} should be stored on {responsible_node}")
+                            try:
+                                # Verify file exists before transfer
+                                file_path = os.path.join(node_dir, file_name)
+                                if os.path.exists(file_path):
+                                    # Send file to responsible node
+                                    self.transfer_file_to_node(file_name, responsible_node)
+                                    # Remove from local directory after successful transfer
+                                    os.remove(file_path)
+                                    print(f"Transferred {file_name} to {responsible_node}")
+                                else:
+                                    print(f"File {file_name} does not exist for transfer")
+                            except Exception as e:
+                                print(f"Failed to transfer {file_name}: {e}")
+                                # Keep the file locally if transfer fails
+                                if file_name not in self.files:
+                                    self.files.append(file_name)
+                    
+                    # Find files that were removed
+                    removed_files = tracked_files - current_files
+                    for file_name in removed_files:
+                        if file_name in self.files:
+                            print(f"File removed: {file_name}")
+                            self.files.remove(file_name)
+                            
+            except Exception as e:
+                print(f"File discovery error: {e}")
+            
+            # Check every 5 seconds
+            for _ in range(50):  # 5 seconds total, check stop every 0.1s
+                if self.stop:
+                    break
+                time.sleep(0.1)
+    
+    def transfer_file_to_node(self, file_name, target_node):
+        """Transfer a file to the responsible node"""
+        try:
+            # Validate target node
+            if not target_node or len(target_node) != 2 or target_node == (" ", 0):
+                raise Exception(f"Invalid target node: {target_node}")
+            
+            # Check if file exists
+            file_path = os.path.join(f"{self.host}_{self.port}", file_name)
+            if not os.path.exists(file_path):
+                raise Exception(f"File {file_path} does not exist")
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10.0)  # 10 second timeout
+            sock.connect(target_node)
+            
+            message = f"put_file {file_name}"
+            sock.send(message.encode('utf-8'))
+            
+            # Send the file
+            time.sleep(0.5)
+            self.sendFile(sock, file_path)
+            sock.close()
+            
+        except Exception as e:
+            try:
+                sock.close()
+            except:
+                pass
+            raise Exception(f"Transfer failed: {e}")
 
     def handleConnection(self, client, addr):
         '''nn'''
@@ -460,6 +566,21 @@ class Node:
             suc_suc1 = message_list[3]
             suc_suc2 = int(message_list[4])
 
+        # Handle topology updates from bootstrap server
+        if message_list[0] == "topology_update_pred":
+            pred_host = message_list[1]
+            pred_port = int(message_list[2])
+            self.predecessor = (pred_host, pred_port)
+            print(f"Topology update: New predecessor {self.predecessor}")
+            client.close()
+
+        if message_list[0] == "topology_update_succ":
+            succ_host = message_list[1]
+            succ_port = int(message_list[2])
+            self.successor = (succ_host, succ_port)
+            print(f"Topology update: New successor {self.successor}")
+            client.close()
+
             self.succ_succ =  (suc_suc1, suc_suc2)
 
             s_1 = str(self.successor[0])
@@ -542,22 +663,47 @@ class Node:
                 soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     succ_msg = ""
-                    s_1 = self.successor[0]
-                    s_2 = self.successor[1]
-                    soc.connect((s_1, s_2))
-                    soc.send(message.encode('utf-8'))
-                    message = soc.recv(1024).decode('utf-8')
-                    succ_msg = message
-                    soc.close()
+                    # Check if successor is valid before using it
+                    if (self.successor and len(self.successor) == 2 and 
+                        self.successor != (self.host, self.port) and
+                        isinstance(self.successor[0], str) and 
+                        isinstance(self.successor[1], int)):
+                        
+                        s_1 = self.successor[0]
+                        s_2 = self.successor[1]
+                        soc.settimeout(3.0)  # Set timeout
+                        soc.connect((s_1, s_2))
+                        soc.send(message.encode('utf-8'))
+                        message = soc.recv(1024).decode('utf-8')
+                        succ_msg = message
+                        soc.close()
 
-                    if succ_msg != "":
+                        if succ_msg != "":
+                            node_alive = True
+                    else:
+                        # If no valid successor, skip pinging
                         node_alive = True
-
-                except:
-                    succ_msg = ""
+                        
+                except (socket.timeout, ConnectionRefusedError, OSError) as e:
+                    print(f"Successor {self.successor} is not responding: {e}")
+                    try:
+                        soc.close()
+                    except:
+                        pass
+                    # Try to get updated topology from bootstrap server
+                    try:
+                        response = self.send_to_bootstrap(f"lookup {self.host} {self.port}")
+                        if response and response.startswith("successor"):
+                            parts = response.split()
+                            if len(parts) >= 3:
+                                new_succ = (parts[1], int(parts[2]))
+                                if new_succ != self.successor:
+                                    print(f"Updated successor from {self.successor} to {new_succ}")
+                                    self.successor = new_succ
+                    except Exception as update_error:
+                        print(f"Failed to update successor: {update_error}")
+                        
                     node_alive = False
-                    self.num_pings = self.num_pings + 1
-                 
 
                 if self.num_pings == 2:
                     num_tracer = True
@@ -570,15 +716,20 @@ class Node:
                     self.successor = self.succ_succ
                     self.num_pings = 0
 
+                    # Only proceed if we have a valid successor
+                    if self.successor and len(self.successor) == 2:
+                        h_o = str(self.host)
+                        p_o = str(self.port)
 
-                    h_o = str(self.host)
-                    p_o = str(self.port)
-
-                    message = "dead_ping" + " " + h_o + " "+ p_o + " " + "no"
-                    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    conn.connect(self.successor)
-                    conn.send(message.encode('utf-8'))
-                    conn.close()
+                        message = "dead_ping" + " " + h_o + " "+ p_o + " " + "no"
+                        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        try:
+                            conn.connect(self.successor)
+                            conn.send(message.encode('utf-8'))
+                            conn.close()
+                        except Exception as e:
+                            print(f"Dead ping error: {e}")
+                            conn.close()
 
                     if node_alive:
                         message_join = "succ_changed"
@@ -586,26 +737,35 @@ class Node:
                         message_join = "succ_not_changed"
 
                     # update your predecessor's consecutive successor
-                    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    soc.connect(self.predecessor)
-                    suc1 = str(self.successor[0])
-                    suc2 = str(self.successor[1])
+                    if self.predecessor and len(self.predecessor) == 2 and self.successor and len(self.successor) == 2:
+                        try:
+                            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            soc.connect(self.predecessor)
+                            suc1 = str(self.successor[0])
+                            suc2 = str(self.successor[1])
 
-                    message = "suc_suc_change_ping" + " " + suc1 + " " + suc2 + " " + message_join
-                    soc.send(message.encode('utf-8'))
-                    soc.close()
+                            message = "suc_suc_change_ping" + " " + suc1 + " " + suc2 + " " + message_join
+                            soc.send(message.encode('utf-8'))
+                            soc.close()
+                        except Exception as e:
+                            print(f"Predecessor update error: {e}")
 
-                    new_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    new_conn.connect(self.successor)
-                    file_list = "leaving_succ_take_files"
+                    # Transfer backup files to successor
+                    if self.successor and len(self.successor) == 2 and self.backUpFiles:
+                        try:
+                            new_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            new_conn.connect(self.successor)
+                            file_list = "leaving_succ_take_files"
 
-                    for file in self.backUpFiles:
-                        file_list = file_list + " " + file + " "
+                            for file in self.backUpFiles:
+                                file_list = file_list + " " + file + " "
 
-                    file_list = file_list.strip()
+                            file_list = file_list.strip()
 
-                    new_conn.send(file_list.encode('utf-8'))
-                    new_conn.close()
+                            new_conn.send(file_list.encode('utf-8'))
+                            new_conn.close()
+                        except Exception as e:
+                            print(f"File transfer error: {e}")
                     
             # Sleep in smaller chunks to respond to stop signal faster
             for _ in range(5):  # 0.5 seconds total, check stop every 0.1s
@@ -724,7 +884,7 @@ class Node:
         # Start heartbeat thread
         self.heartbeat_thread = threading.Thread(target=self.send_heartbeat, daemon=True)
         self.heartbeat_thread.start()
-
+        
         # Call ping thread for node-to-node monitoring
         self.thread_ping()
 
@@ -815,42 +975,32 @@ class Node:
 
     def lookup_file(self, key, File_name, curr_addr):
         '''nn'''
-        tuple_ret = (" ", 0)
-        # ask your successor for its key
-
+        # Check if this node is responsible for the key
         successor_key = self.hasher(self.successor[0] + str(self.successor[1]))
 
         if self.key == key:
             return curr_addr
 
+        # If we're the only node, we're responsible
+        if self.successor == (self.host, self.port):
+            return curr_addr
+
         if successor_key > self.key:
-            # successor > node's key > self.key
-            if successor_key>key and key >self.key: # self.key<=key<successor_key
-
+            # Normal case: successor > self.key
+            if key > self.key and key <= successor_key:
+                return self.successor
+            elif key <= self.key:
+                return curr_addr  # This node is responsible
+            else:
+                # Forward to successor - but we don't wait for response in discovery
+                # Return the successor as best guess
                 return self.successor
 
-            else:
-                lookup_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                lookup_socket.connect(self.successor)
-                message_code = "lookup_file"
-                message = message_code + " " + File_name +" " +  str(key) + " " + curr_addr[0] + " " + str(curr_addr[1])
-                lookup_socket.send(message.encode('utf-8'))
-                lookup_socket.close()
-
-        else: # this is the wrap around case
-            x_x = (key<successor_key)
-            if x_x or (key>self.key): # correct range found
+        else: # Wrap around case: successor < self.key
+            if key > self.key or key <= successor_key:
                 return self.successor
-
             else:
-                lookup_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                lookup_socket.connect(self.successor)
-                message_code = "lookup_file"
-                message = message_code + " " + File_name +" " +  str(key) + " " + curr_addr[0] + " " + str(curr_addr[1])
-                lookup_socket.send(message.encode('utf-8'))
-                lookup_socket.close()
-
-        return tuple_ret
+                return curr_addr  # This node is responsible
 
     def put(self, fileName):
         '''hh'''
@@ -969,25 +1119,33 @@ class Node:
         else:
             file_node = file_node_lookup
 
-        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        new_socket.connect(file_node)
-        message = "send_file" + " " + fileName + " " + self.host + " " + str(self.port)
-        new_socket.send(message.encode('utf-8'))
+        # Validate file_node before connecting
+        if not file_node or len(file_node) != 2:
+            print(f"Invalid file node: {file_node}")
+            return None
 
-        msg = new_socket.recv(1024).decode('utf-8')
+        try:
+            new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_socket.connect(file_node)
+            message = "send_file" + " " + fileName + " " + self.host + " " + str(self.port)
+            new_socket.send(message.encode('utf-8'))
 
-        msg_list = msg.split()
+            msg = new_socket.recv(1024).decode('utf-8')
+            msg_list = msg.split()
 
-        _path_file = self.host+"_"+str(self.port) + "/" + fileName
+            _path_file = self.host+"_"+str(self.port) + "/" + fileName
 
+            if msg_list[0] == "file_found":
+                new_socket.close()
+                self.files.append(fileName)
+                return fileName
 
-        if msg_list[0] == "file_found":
-            new_socket.close()
-            self.files.append(fileName)
-            return fileName
-
-        elif msg_list[0] == "file_not_found":
-            new_socket.close()
+            elif msg_list[0] == "file_not_found":
+                new_socket.close()
+                return None
+                
+        except Exception as e:
+            print(f"Error retrieving file: {e}")
             return None
 
 
