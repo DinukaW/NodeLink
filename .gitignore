@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node directories (contains user files)
+localhost_*/
+
+# Logs
+*.log
+
+# Development files
+test_*.py
+demo_*.py
+*_test.py
+verify_*.py
+debug_*.py

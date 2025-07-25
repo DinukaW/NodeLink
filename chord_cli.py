@@ -92,19 +92,21 @@ def main():
                 break
                 
             elif command[0] in ["quit", "exit"]:
-                print("Shutting down node...")
-                node.kill()
+                print("Shutting down node and transferring files...")
+                node.quit_with_transfer()
+                print("Node shutdown complete")
                 break
                 
             else:
                 print("Unknown command. Available commands: put, get, status, leave, quit")
                 
     except KeyboardInterrupt:
-        print("\nShutting down node...")
-        node.kill()
+        print("\nShutting down node and transferring files...")
+        node.quit_with_transfer()
     except Exception as e:
         print(f"Error: {e}")
-        node.kill()
+        print("Shutting down node and transferring files...")
+        node.quit_with_transfer()
 
 if __name__ == "__main__":
     main()

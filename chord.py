@@ -459,10 +459,18 @@ class Node:
         if message_list[0] == "send_file":
             file = message_list[1]
 
+            # Check if file is in main files
             if file in self.files:
                 message = "file_found"
                 client.send(message.encode('utf-8'))
-
+            # Also check if file is in backup files (in case main node left)
+            elif file in self.backUpFiles:
+                message = "file_found"
+                client.send(message.encode('utf-8'))
+                # Move from backup to main files since it's being accessed
+                self.backUpFiles.remove(file)
+                self.files.append(file)
+                print(f"Retrieved file from backup: {file}")
             else:
                 message = "file_not_found"
                 client.send(message.encode('utf-8'))
@@ -530,6 +538,17 @@ class Node:
                 self.backUpFiles.append(file)
             client.close()
 
+        # Handle backup file restoration when a node leaves
+        if message_list[0] == "restore_backup_file":
+            backup_file = message_list[1]
+            if backup_file in self.backUpFiles:
+                # Move from backup to main files
+                self.backUpFiles.remove(backup_file)
+                if backup_file not in self.files:
+                    self.files.append(backup_file)
+                    print(f"Restored backup file: {backup_file}")
+            client.close()
+
         ####################################################### leave
         if message_list[0] == "leaving":
             client.close()
@@ -563,8 +582,22 @@ class Node:
             suc2 = int(message_list[2])
             self.successor = (suc1, suc2)
 
-            suc_suc1 = message_list[3]
-            suc_suc2 = int(message_list[4])
+            if len(message_list) >= 5:
+                suc_suc1 = message_list[3]
+                suc_suc2 = int(message_list[4])
+                self.succ_succ = (suc_suc1, suc_suc2)
+
+                s_1 = str(self.successor[0])
+                s_2 = str(self.successor[1])
+
+                message = "going_change_succ_succ" + " " + s_1 + " " + s_2
+                soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    soc.connect(self.predecessor)
+                    soc.send(message.encode('utf-8'))
+                    soc.close()
+                except Exception as e:
+                    print(f"Error notifying predecessor: {e}")
 
         # Handle topology updates from bootstrap server
         if message_list[0] == "topology_update_pred":
@@ -580,17 +613,6 @@ class Node:
             self.successor = (succ_host, succ_port)
             print(f"Topology update: New successor {self.successor}")
             client.close()
-
-            self.succ_succ =  (suc_suc1, suc_suc2)
-
-            s_1 = str(self.successor[0])
-            s_2 = str(self.successor[1])
-
-            message = "going_change_succ_succ" + " " + s_1 + " " + s_2
-            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            soc.connect(self.predecessor)
-            soc.send(message.encode('utf-8'))
-            soc.close()
 
         if message_list[0] == "leaving_succ_take_files":
             file_list = message_list[1:]
@@ -1149,6 +1171,64 @@ class Node:
             return None
 
 
+    def transfer_files_before_leaving(self):
+        """Transfer files to successor and predecessor before leaving the network"""
+        if self.successor == (self.host, self.port):
+            print("This is the only node in the network - no files to transfer")
+            return
+            
+        print(f"Transferring {len(self.files)} files to successor and predecessor before leaving...")
+        
+        # Distribute files randomly between successor and predecessor
+        import random
+        
+        for i, file_name in enumerate(self.files):
+            try:
+                file_path = os.path.join(f"{self.host}_{self.port}", file_name)
+                if os.path.exists(file_path):
+                    # Randomly choose successor or predecessor
+                    if random.choice([True, False]) and self.predecessor != (self.host, self.port):
+                        target_node = self.predecessor
+                        target_name = "predecessor"
+                    else:
+                        target_node = self.successor
+                        target_name = "successor"
+                    
+                    print(f"Transferring {file_name} to {target_name} {target_node}")
+                    
+                    # Transfer the actual file
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(10.0)
+                    sock.connect(target_node)
+                    
+                    message = f"put_file {file_name}"
+                    sock.send(message.encode('utf-8'))
+                    
+                    time.sleep(0.2)  # Small delay
+                    self.sendFile(sock, file_path)
+                    sock.close()
+                    
+                    print(f"Successfully transferred {file_name} to {target_node}")
+                    
+            except Exception as e:
+                print(f"Failed to transfer {file_name}: {e}")
+                # Continue with other files
+                continue
+        
+        # Also send backup files to ensure they don't get lost
+        if self.backUpFiles:
+            print(f"Transferring {len(self.backUpFiles)} backup files to successor")
+            try:
+                for backup_file in self.backUpFiles:
+                    # Try to send backup files to successor
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.connect(self.successor)
+                    message = f"restore_backup_file {backup_file}"
+                    sock.send(message.encode('utf-8'))
+                    sock.close()
+            except Exception as e:
+                print(f"Failed to transfer backup files: {e}")
+
     def leave(self):
         '''bb'''
         self.leave_bool = True
@@ -1162,32 +1242,45 @@ class Node:
         except Exception as e:
             print(f"Error notifying bootstrap server about leave: {e}")
 
-        # Original leave logic
+        # Transfer files before leaving
+        self.transfer_files_before_leaving()
+
+        # Original leave protocol - notify successor about topology change
         if self.successor != (self.host, self.port):  # Only if not the only node
-            soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            soc.connect(self.successor)
+            try:
+                soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                soc.connect(self.successor)
 
-            pred1 = str(self.predecessor[0]) 
-            pred2 = str(self.predecessor[1])
-            msg_code = "leaving" 
+                pred1 = str(self.predecessor[0]) 
+                pred2 = str(self.predecessor[1])
+                msg_code = "leaving" 
 
-            message = msg_code + " " + pred1 + " " + pred2
-            soc.send(message.encode('utf-8'))
-            soc.close()
+                message = msg_code + " " + pred1 + " " + pred2
+                soc.send(message.encode('utf-8'))
+                soc.close()
+            except Exception as e:
+                print(f"Failed to notify successor: {e}")
 
-            # send files to successor
-            new_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            new_conn.connect(self.successor)
-            file_list = "leaving_succ_take_files"
+        self.kill()
 
-            for file in self.files:
-                file_list = file_list + " " + file + " "
+    def quit_with_transfer(self):
+        '''Enhanced quit that transfers files before leaving'''
+        self.leave_bool = True
+        
+        # Notify bootstrap server (same as leave)
+        try:
+            message = f"leave {self.host} {self.port}"
+            response = self.send_to_bootstrap(message)
+            if response != "ack":
+                print(f"Bootstrap server leave notification failed: {response}")
+        except Exception as e:
+            print(f"Error notifying bootstrap server about quit: {e}")
 
-            file_list = file_list.strip()
-
-            new_conn.send(file_list.encode('utf-8'))
-            new_conn.close()
-
+        # Transfer files before quitting
+        self.transfer_files_before_leaving()
+        
+        # Don't do the topology notification protocol for quit (faster exit)
+        # Just kill the node
         self.kill()
 
 
