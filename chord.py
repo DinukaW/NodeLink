@@ -210,6 +210,7 @@ class Node:
     
     def send_index_entry_to_node(self, word, filename, all_words, target_node):
         """Send an index entry to the responsible node"""
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10.0)
@@ -222,7 +223,11 @@ class Node:
             sock.close()
             
         except Exception as e:
-            sock.close() if sock else None
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
             raise Exception(f"Index entry transfer failed: {e}")
     
     def search_word_in_index(self, search_word):
@@ -1565,12 +1570,15 @@ class Node:
         return final_results
 
     def transfer_files_before_leaving(self):
-        """Transfer files to successor and predecessor before leaving the network"""
+        """Transfer files and index entries to successor and predecessor before leaving the network"""
         if self.successor == (self.host, self.port):
             print("This is the only node in the network - no files to transfer")
             return
             
-        print(f"Transferring {len(self.files)} files to successor and predecessor before leaving...")
+        print(f"Transferring {len(self.files)} files and index entries to successor and predecessor before leaving...")
+        
+        # First transfer index entries to preserve search functionality
+        self.transfer_index_entries_before_leaving()
         
         # Distribute files randomly between successor and predecessor
         import random
@@ -1621,6 +1629,43 @@ class Node:
                     sock.close()
             except Exception as e:
                 print(f"Failed to transfer backup files: {e}")
+
+    def transfer_index_entries_before_leaving(self):
+        """Transfer all index entries to appropriate nodes before leaving"""
+        if not self.file_index:
+            print("No index entries to transfer")
+            return
+            
+        print(f"Transferring {len(self.file_index)} index entries before leaving...")
+        transferred_count = 0
+        
+        for word, entries in self.file_index.items():
+            try:
+                # Find the new responsible node for this word
+                word_key = self.hasher(word.lower())
+                responsible_node = self.find_responsible_node_for_key(word_key)
+                
+                # Skip if this node would still be responsible (shouldn't happen when leaving)
+                if responsible_node == (self.host, self.port):
+                    continue
+                
+                # Transfer each index entry for this word
+                for filename, all_words in entries:
+                    try:
+                        self.send_index_entry_to_node(word, filename, all_words, responsible_node)
+                        transferred_count += 1
+                        print(f"✅ Transferred index: '{word}' → {responsible_node} (file: {filename})")
+                        self.logger.debug(f"Transferred index entry for word '{word}' (file: {filename}) to node {responsible_node}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to transfer index entry for word '{word}': {e}")
+                        print(f"❌ Failed to transfer index: '{word}' → {responsible_node}: {e}")
+                        
+            except Exception as e:
+                self.logger.error(f"Failed to find responsible node for word '{word}': {e}")
+                print(f"Failed to find responsible node for word '{word}': {e}")
+        
+        print(f"Successfully transferred {transferred_count} index entries")
+        self.logger.info(f"Transferred {transferred_count} index entries before leaving")
 
     def leave(self):
         '''bb'''

@@ -1,284 +1,81 @@
 # Chord DHT File Sharing System
 
-A robust distributed hash table (DHT) based file sharing system implementing the Chord protocol with automatic file discovery, fault tolerance, and reliable file transfer.
+A distributed hash table (DHT) implementation of the Chord protocol for file sharing with both CLI and REST API interfaces.
 
 ## Features
 
-### 🚀 **Core Functionality**
-- **Distributed File Storage**: Files are distributed across nodes using consistent hashing
-- **Automatic File Discovery**: Files are automatically detected and distributed without manual commands
-- **Fault Tolerant**: Files are preserved even when nodes crash or leave unexpectedly
-- **Bootstrap Server**: Centralized coordination for network topology management
-- **Real-time Topology Updates**: Network adapts automatically when nodes join/leave
+- **Distributed File Storage**: Files stored across nodes using consistent hashing
+- **File Search**: Search for files by filename keywords
+- **Fault Tolerance**: Files backed up on multiple nodes
+- **CLI Interface**: Interactive command-line interface
+- **REST API**: HTTP endpoints for web-based operations
+- **Bootstrap Server**: Network coordination and node management
 
-### 🛡️ **Reliability Features**
-- **File-Safe Exit**: Both `quit` and `leave` commands transfer files before shutdown
-- **Backup System**: Files are backed up on predecessor nodes
-- **Crash Recovery**: Files are retrievable from backup even if primary nodes fail
-- **Random Distribution**: Files are distributed randomly to prevent hotspots
-- **Network Healing**: Topology updates automatically when nodes become unavailable
-
-### 🔧 **Advanced Features**
-- **Consistent Hashing**: Uses MD5 hashing with 16-bit key space (65,536 positions)
-- **File Lookup**: Efficient O(log N) lookup time for file location
-- **Distributed File Indexing**: Files are automatically indexed by filename words for fast search
-- **Multi-word Search**: Search for files using any words from their filenames
-- **Multi-threaded**: Concurrent handling of multiple operations
-- **Interactive CLI**: User-friendly command-line interface for each node
-
-## Architecture
-
-### System Components
-
-1. **Bootstrap Server** (`bootstrap_server.py`)
-   - Manages network topology and node registration
-   - Handles heartbeat monitoring and failure detection
-   - Coordinates topology updates when nodes join/leave
-
-2. **Chord Node** (`chord.py`)
-   - Implements the Chord DHT protocol
-   - Handles file storage, retrieval, and transfer
-   - Manages successor/predecessor relationships
-   - Automatic file discovery and distribution
-
-3. **Command Line Interface** (`chord_cli.py`)
-   - Interactive interface for node operations
-   - Supports file operations and network commands
-   - Handles graceful shutdown with file transfer
-
-## Installation & Setup
+## Quick Start
 
 ### Prerequisites
-- Python 3.7 or higher
-- No external dependencies required (uses only standard library)
+- Python 3.7+
+- For REST API: `pip install flask werkzeug requests`
 
-### Quick Start
+### Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/programmer-xyz/Chord-DHT-file-sharing-system.git
-   cd Chord-DHT-file-sharing-system
-   ```
-
-2. **Start the Bootstrap Server**
+1. **Start Bootstrap Server**
    ```bash
    python3 bootstrap_server.py 5000
    ```
 
-3. **Start Chord Nodes**
+2. **Start CLI Nodes**
    ```bash
-   # Terminal 1 - First node
    python3 chord_cli.py localhost 8001
-   
-   # Terminal 2 - Second node  
    python3 chord_cli.py localhost 8002
-   
-   # Terminal 3 - Third node
    python3 chord_cli.py localhost 8003
    ```
 
-4. **Add Files**
-   Simply drop files into the node directories (e.g., `localhost_8001/`, `localhost_8002/`) and they will be automatically discovered and distributed.
+3. **Or Start REST API Nodes**
+   ```bash
+   python3 rest_api.py 5001 8001
+   python3 rest_api.py 5002 8002
+   ```
 
 ## Usage
 
-### Node Commands
+### CLI Commands
+- `put <filename>` - Store a file
+- `get <filename>` - Retrieve a file  
+- `search <term>` - Search for files
+- `status` - Show node info
+- `quit` - Exit node
 
-- **`put <filename>`** - Manually store a file in the network
-- **`get <filename>`** - Retrieve a file from the network
-- **`search <term>`** - Search for files by filename words
-- **`status`** - Show node information and file lists
-- **`leave`** - Gracefully leave the network (transfers files)
-- **`quit`** - Fast exit with file transfer (recommended)
+### REST API Endpoints
+- `POST /upload` - Upload file
+- `GET /search?q=<term>` - Search files
+- `GET /download/<filename>` - Download file
+- `GET /node/status` - Node status
+- `GET /health` - Health check
 
-### Example Session
+### Example Usage
 
+**CLI:**
 ```bash
-[localhost:8001]> status
-Node Key: 58795
-Successor: ('localhost', 8002)
-Predecessor: ('localhost', 8003)
-Files: ['document.txt', 'image.jpg']
-Backup Files: ['backup1.txt', 'backup2.txt']
-
-[localhost:8001]> get shared_file.txt
-File 'shared_file.txt' retrieved successfully
-
-[localhost:8001]> search learning
-Found 2 files matching 'learning':
-  1. machine_learning_algorithms_notes.txt (matched words: learning)
-  2. deep_learning_tutorial.pdf (matched words: learning)
-
-[localhost:8001]> search database systems
-Found 1 files matching 'database systems':
-  1. database_management_systems_guide.txt (matched words: database, systems)
-
-[localhost:8001]> quit
-Shutting down node and transferring files...
-Transferring document.txt to successor ('localhost', 8002)
-Successfully transferred document.txt to ('localhost', 8002)
-Node shutdown complete
+[localhost:8001]> put document.txt
+[localhost:8001]> search document
+[localhost:8001]> get document.txt
 ```
 
-### Automatic File Discovery
-
-The system automatically discovers files placed in node directories:
-
+**REST API:**
 ```bash
-# Add a file to any node directory
-echo "Hello World" > localhost_8001/hello.txt
-
-# The system will automatically:
-# 1. Discover the file
-# 2. Calculate which node should store it
-# 3. Transfer it to the correct node
-# 4. Make it available for retrieval from any node
+curl -X POST -F "file=@doc.txt" http://localhost:5001/upload
+curl "http://localhost:5001/search?q=document"
+curl -O http://localhost:5001/download/doc.txt
 ```
 
-## Network Topology
+## Files
 
-The system uses a ring topology where each node maintains:
-- **Successor**: Next node in the ring (clockwise)
-- **Predecessor**: Previous node in the ring (counter-clockwise)
-- **Key**: MD5 hash of node address (host + port)
-
-Files are stored on the node whose key is equal to or immediately follows the file's hash key in the ring.
-
-## File Distribution Strategy
-
-1. **Primary Storage**: Files are stored on the responsible node (determined by hash)
-2. **Backup Storage**: Files are also backed up on the predecessor node
-3. **Index Distribution**: Each word from filenames is indexed on the responsible node for that word
-4. **Transfer on Leave**: When nodes leave, files are randomly distributed to successor and predecessor
-5. **Recovery**: Files can be retrieved from backup if primary node fails
-
-## File Indexing and Search
-
-The system automatically creates a distributed index for efficient file searching:
-
-### Indexing Process
-1. **Word Extraction**: Filenames are split into individual words (e.g., "machine_learning_notes.txt" → ["machine", "learning", "notes"])
-2. **Hash Distribution**: Each word is hashed and stored on the responsible node
-3. **Index Entry**: Contains the word, full filename, and all other words in the title
-4. **Automatic Updates**: Index entries are created when files are added (both manually and automatically)
-
-### Search Functionality
-- **Multi-word Support**: Search for files using any combination of words
-- **Distributed Queries**: Search queries are routed to the appropriate nodes
-- **Relevance Display**: Shows which words matched for each result
-- **Real-time Results**: Index is updated as files are added or removed
-
-### Example Searches
-```bash
-# Search for files containing "machine"
-search machine
-# Results: machine_learning_algorithms_notes.txt
-
-# Search for files containing "database" or "systems"  
-search database systems
-# Results: database_management_systems_guide.txt (matched: database, systems)
-
-# Search across the distributed network
-search learning
-# Results from any node, regardless of where files are stored
-
-# Multi-word search with relevance
-search distributed computing
-# Results: distributed_systems_project_report.txt (matched: distributed)
-#          distributed_computing_notes.doc (matched: distributed, computing)
-```
-
-## Recent Fixes (Phase 2 Implementation)
-
-### ✅ **Distributed Search Issues Resolved**
-- **Fixed distributed lookup**: Index queries now properly route through the DHT ring
-- **Enhanced message forwarding**: Index operations correctly forward to responsible nodes
-- **Improved key responsibility**: Better logic for determining which node stores index entries
-- **Added fault tolerance**: Fallback mechanisms when distributed operations fail
-- **Preserved existing functionality**: All original file operations remain intact
-
-### 🔧 **Technical Improvements**
-- **Proper DHT routing**: Index entries use the same routing logic as file operations
-- **Message forwarding**: `store_index_entry` and `query_index` messages forward through ring
-- **Responsibility checking**: `is_responsible_for_key()` method for accurate key ownership
-- **Error handling**: Graceful degradation when network operations fail
-- **Integration**: Seamless integration with existing file discovery and storage
-
-## Error Handling
-
-The system handles various failure scenarios:
-
-- **Node Crashes**: Files are recoverable from backup nodes
-- **Network Partitions**: Bootstrap server coordinates healing
-- **File Transfer Failures**: Continues with other files, keeps local copy
-- **Bootstrap Server Down**: Nodes can operate with cached topology
-
-## Configuration
-
-### Default Settings
-- Bootstrap Server: `localhost:5000`
-- Hash Space: 16-bit (65,536 positions)
-- File Discovery Interval: 5 seconds
-- Heartbeat Interval: 3 seconds
-- Connection Timeout: 10 seconds
-
-### Custom Configuration
-```bash
-# Custom bootstrap server
-python3 chord_cli.py localhost 8001 custom_host 9000
-
-# Different ports
-python3 bootstrap_server.py 6000
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Bootstrap server not available"**
-   - Ensure bootstrap server is running
-   - Check host/port configuration
-
-2. **Files not found after node leaves**
-   - Files should be automatically transferred
-   - Check other nodes with `get` command
-   - Files may be in backup storage
-
-3. **Connection errors**
-   - Verify all nodes are running
-   - Check network connectivity
-   - Ensure no port conflicts
-
-### Debug Information
-Use the `status` command to check:
-- Node connectivity (successor/predecessor)
-- File distribution (files vs backup files)
-- Network topology health
-
-## Performance
-
-- **Lookup Time**: O(log N) where N is number of nodes
-- **Storage Overhead**: Each file stored on 1-2 nodes (primary + backup)
-- **Network Messages**: Minimal due to efficient routing
-- **Scalability**: Supports hundreds of nodes efficiently
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+- `chord.py` - Core Chord DHT implementation
+- `chord_cli.py` - Command line interface
+- `rest_api.py` - REST API server
+- `bootstrap_server.py` - Network coordination server
 
 ## License
 
-This project is open source. Feel free to use, modify, and distribute.
-
-## Authors
-
-- **programmer-xyz** - Initial implementation
-- **Contributors** - Various improvements and bug fixes
-
----
-
-**Note**: This implementation is designed for educational and research purposes. For production use, consider additional security measures and performance optimizations.
+Open source project for educational purposes.

@@ -20,6 +20,7 @@ class BootstrapServer:
         # Track all nodes in the network
         self.nodes = {}  # {(host, port): {"key": key, "successor": tuple, "predecessor": tuple, "last_heartbeat": timestamp}}
         self.nodes_lock = threading.Lock()
+        self.start_time = time.time()  # Track server start time
         
         # Setup logging
         self.setup_logging()
@@ -119,6 +120,8 @@ class BootstrapServer:
                 self.handle_leave(client_socket, message_parts)
             elif command == "get_nodes":
                 self.handle_get_nodes(client_socket, message_parts)
+            elif command == "status":
+                self.handle_status_request(client_socket)
             else:
                 print(f"Unknown command: {command}")
                 client_socket.close()
@@ -388,6 +391,34 @@ class BootstrapServer:
                 "total_nodes": len(self.nodes),
                 "nodes": dict(self.nodes)
             }
+    
+    def handle_status_request(self, client_socket):
+        """Handle status request from REST API"""
+        try:
+            import json
+            from datetime import datetime
+            
+            with self.nodes_lock:
+                status = {
+                    "status": "active",
+                    "host": self.host,
+                    "port": self.port,
+                    "total_nodes": len(self.nodes),
+                    "active_nodes": [f"{addr[0]}:{addr[1]}" for addr in self.nodes.keys()],
+                    "timestamp": datetime.now().isoformat(),
+                    "uptime_seconds": int(time.time() - self.start_time) if hasattr(self, 'start_time') else 0
+                }
+            
+            response = json.dumps(status)
+            client_socket.send(response.encode('utf-8'))
+            client_socket.close()
+            
+            self.logger.info("Provided status information to REST API")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling status request: {e}")
+            client_socket.send(json.dumps({"error": str(e)}).encode('utf-8'))
+            client_socket.close()
     
     def stop_server(self):
         """Stop the bootstrap server"""
